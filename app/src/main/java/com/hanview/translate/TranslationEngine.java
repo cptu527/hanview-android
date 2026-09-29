@@ -67,6 +67,27 @@ public class TranslationEngine {
         warmUp("ja");
     }
 
+    public static void prewarmCommon(Context context) {
+        String[] common = new String[]{"zh", "en", "ja"};
+
+        for (String tag : common) {
+            String source = TranslateLanguage.fromLanguageTag(tag);
+            if (source == null || TranslateLanguage.KOREAN.equals(source)) {
+                continue;
+            }
+
+            TranslatorOptions options =
+                    new TranslatorOptions.Builder()
+                            .setSourceLanguage(source)
+                            .setTargetLanguage(TranslateLanguage.KOREAN)
+                            .build();
+
+            Translator translator = Translation.getClient(options);
+            translator.downloadModelIfNeeded(new DownloadConditions.Builder().build())
+                    .addOnCompleteListener(task -> translator.close());
+        }
+    }
+
     public void translate(List<OcrBlock> blocks, Callback callback) {
         if (blocks.isEmpty()) {
             callback.onSuccess(blocks, false);
