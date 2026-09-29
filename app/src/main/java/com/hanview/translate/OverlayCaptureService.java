@@ -61,7 +61,7 @@ public class OverlayCaptureService extends Service {
             "viewnyang_live_translation";
     private static final int NOTIFICATION_ID = 527;
 
-    private static final long LIVE_INTERVAL_MS = 300L;
+    private static final long LIVE_INTERVAL_MS = 380L;
     private static final long OVERLAY_HIDE_BEFORE_CAPTURE_MS = 20L;
 
     private final Handler mainHandler =
@@ -87,6 +87,7 @@ public class OverlayCaptureService extends Service {
     private volatile boolean processing = false;
     private volatile boolean liveEnabled = false;
     private volatile int liveGeneration = 0;
+    private volatile long latestFrameId = 0L;
 
     private int captureWidth;
     private int captureHeight;
@@ -344,23 +345,28 @@ public class OverlayCaptureService extends Service {
 
                         final int generation =
                                 liveGeneration;
+                        final long frameId =
+                                ++latestFrameId;
 
                         Bitmap bitmap =
                                 imageToBitmap(image);
 
+                        // Old translations belong to the old scroll position.
+                        // Remove them immediately so they never float over new content.
                         mainHandler.post(() -> {
                             if (translationOverlay != null
                                     && liveEnabled) {
-                                translationOverlay
-                                        .setVisibility(
-                                                View.VISIBLE
-                                        );
+                                translationOverlay.clearBlocks();
+                                translationOverlay.setVisibility(
+                                        View.VISIBLE
+                                );
                             }
                         });
 
                         processBitmap(
                                 bitmap,
-                                generation
+                                generation,
+                                frameId
                         );
                     } catch (Exception ignored) {
                         captureRequested = false;
@@ -446,7 +452,8 @@ public class OverlayCaptureService extends Service {
 
     private void processBitmap(
             Bitmap bitmap,
-            int generation
+            int generation,
+            long frameId
     ) {
         InputImage input =
                 InputImage.fromBitmap(
@@ -454,70 +461,21 @@ public class OverlayCaptureService extends Service {
                         0
                 );
 
-        // Taobao and similar shopping apps are overwhelmingly Chinese.
-        // Run the Chinese recognizer first instead of waiting for four OCR engines.
-        TextRecognizer chineseRecognizer = recognizers.get(1);
+        // Chinese, Japanese and Latin run together. This fixes pages where a
+        // Chinese recognizer incorrectly steals Japanese kanji or ignores kana.
+        int[] primaryIndexes = new int[]{0, 1, 2};
 
-        chineseRecognizer.process(input)
-                .addOnSuccessListener(text -> {
-                    List<OcrBlock> chinese =
-                            extractForeignLines(text);
-
-                    if (!chinese.isEmpty()) {
-                        finishRecognition(
-                                chinese,
-                                generation,
-                                bitmap
-                        );
-                        bitmap.recycle();
-                    } else {
-                        runFallbackRecognizers(
-                                input,
-                                bitmap,
-                                generation
-                        );
-                    }
-                })
-                .addOnFailureListener(e ->
-                        runFallbackRecognizers(
-                                input,
-                                bitmap,
-                                generation
-                        )
-                );
-    }
-
-    private void runFallbackRecognizers(
-            InputImage input,
-            Bitmap bitmap,
-            int generation
-    ) {
         AtomicInteger remaining =
-                new AtomicInteger(
-                        Math.max(0, recognizers.size() - 1)
-                );
+                new AtomicInteger(primaryIndexes.length);
 
         List<OcrBlock> candidates =
                 Collections.synchronizedList(
                         new ArrayList<>()
                 );
 
-        if (remaining.get() == 0) {
-            finishRecognition(
-                    candidates,
-                    generation,
-                    bitmap
-            );
-            bitmap.recycle();
-            return;
-        }
-
-        for (int i = 0; i < recognizers.size(); i++) {
-            if (i == 1) {
-                continue;
-            }
-
-            TextRecognizer recognizer = recognizers.get(i);
+        for (int index : primaryIndexes) {
+            TextRecognizer recognizer =
+                    recognizers.get(index);
 
             recognizer.process(input)
                     .addOnSuccessListener(text -> {
@@ -535,23 +493,58 @@ public class OverlayCaptureService extends Service {
                     })
                     .addOnCompleteListener(task -> {
                         if (remaining.decrementAndGet() == 0) {
-                            finishRecognition(
-                                    candidates,
-                                    generation,
-                                    bitmap
-                            );
-                            bitmap.recycle();
+                            if (!candidates.isEmpty()) {
+                                finishRecognition(
+                                        candidates,
+                                        generation,
+                                        frameId,
+                                        bitmap
+                                );
+                                bitmap.recycle();
+                            } else {
+                                runDevanagariFallback(
+                                        input,
+                                        bitmap,
+                                        generation,
+                                        frameId
+                                );
+                            }
                         }
                     });
         }
     }
 
+    private void runDevanagariFallback(
+            InputImage input,
+            Bitmap bitmap,
+            int generation,
+            long frameId
+    ) {
+        TextRecognizer recognizer =
+                recognizers.get(3);
+
+        recognizer.process(input)
+                .addOnSuccessListener(text ->
+                        finishRecognition(
+                                extractForeignLines(text),
+                                generation,
+                                frameId,
+                                bitmap
+                        )
+                )
+                .addOnCompleteListener(task ->
+                        bitmap.recycle()
+                );
+    }
+
     private void finishRecognition(
             List<OcrBlock> candidates,
             int generation,
+            long frameId,
             Bitmap screenshot
     ) {
-        if (!isCurrentGeneration(generation)) {
+        if (!isCurrentGeneration(generation)
+                || frameId != latestFrameId) {
             processing = false;
             return;
         }
@@ -595,6 +588,12 @@ public class OverlayCaptureService extends Service {
             );
         }
 
+        normalized.removeIf(block ->
+                !block.solidBackground
+                        || block.original == null
+                        || block.original.trim().length() < 2
+        );
+
         if (normalized.isEmpty()) {
             processing = false;
 
@@ -620,7 +619,8 @@ public class OverlayCaptureService extends Service {
 
                         if (!isCurrentGeneration(
                                 generation
-                        )) {
+                        )
+                                || frameId != latestFrameId) {
                             return;
                         }
 
@@ -628,7 +628,8 @@ public class OverlayCaptureService extends Service {
                             if (translationOverlay != null
                                     && isCurrentGeneration(
                                     generation
-                            )) {
+                            )
+                                    && frameId == latestFrameId) {
                                 translationOverlay
                                         .setBlocks(
                                                 translated
@@ -828,78 +829,91 @@ public class OverlayCaptureService extends Service {
     ) {
         Rect r = block.bounds;
 
-        int margin = Math.max(2, dp(2));
+        int margin = Math.max(dp(3), Math.round(r.height() * 0.25f));
         int left = Math.max(0, r.left - margin);
         int top = Math.max(0, r.top - margin);
         int right = Math.min(screenshot.getWidth() - 1, r.right + margin);
         int bottom = Math.min(screenshot.getHeight() - 1, r.bottom + margin);
 
-        int[] colors = new int[64];
-        int count = 0;
+        java.util.HashMap<Integer, Integer> bins =
+                new java.util.HashMap<>();
 
-        // Sample a ring around the OCR bounds. This mostly sees the real card/page
-        // background rather than the glyph pixels themselves.
-        for (int x = left; x <= right && count < colors.length; x += Math.max(1, (right - left) / 12 + 1)) {
-            colors[count++] = screenshot.getPixel(x, top);
-            if (count < colors.length) {
-                colors[count++] = screenshot.getPixel(x, bottom);
-            }
-        }
-
-        for (int y = top; y <= bottom && count < colors.length; y += Math.max(1, (bottom - top) / 8 + 1)) {
-            colors[count++] = screenshot.getPixel(left, y);
-            if (count < colors.length) {
-                colors[count++] = screenshot.getPixel(right, y);
-            }
-        }
-
-        if (count == 0) {
-            block.backgroundColor = Color.WHITE;
-            block.textColor = Color.rgb(28, 28, 30);
-            block.sourceTextSizePx = Math.max(dp(10), r.height() * 0.68f);
-            block.solidBackground = true;
-            return;
-        }
-
-        int[] rs = new int[count];
-        int[] gs = new int[count];
-        int[] bs = new int[count];
-
-        for (int i = 0; i < count; i++) {
-            rs[i] = Color.red(colors[i]);
-            gs[i] = Color.green(colors[i]);
-            bs[i] = Color.blue(colors[i]);
-        }
-
-        java.util.Arrays.sort(rs);
-        java.util.Arrays.sort(gs);
-        java.util.Arrays.sort(bs);
-
-        int mid = count / 2;
-        int red = rs[mid];
-        int green = gs[mid];
-        int blue = bs[mid];
-
-        block.backgroundColor = Color.rgb(red, green, blue);
-
+        int samples = 0;
         int minLum = 255;
         int maxLum = 0;
 
-        for (int i = 0; i < count; i++) {
-            int lum = (rs[i] * 299 + gs[i] * 587 + bs[i] * 114) / 1000;
-            minLum = Math.min(minLum, lum);
-            maxLum = Math.max(maxLum, lum);
+        int stepX = Math.max(1, (right - left) / 10);
+        int stepY = Math.max(1, (bottom - top) / 6);
+
+        for (int x = left; x <= right; x += stepX) {
+            samples += addColorSample(
+                    screenshot.getPixel(x, top),
+                    bins
+            );
+            samples += addColorSample(
+                    screenshot.getPixel(x, bottom),
+                    bins
+            );
+        }
+
+        for (int y = top; y <= bottom; y += stepY) {
+            samples += addColorSample(
+                    screenshot.getPixel(left, y),
+                    bins
+            );
+            samples += addColorSample(
+                    screenshot.getPixel(right, y),
+                    bins
+            );
+        }
+
+        int bestKey = 0;
+        int bestCount = -1;
+
+        for (java.util.Map.Entry<Integer, Integer> entry : bins.entrySet()) {
+            if (entry.getValue() > bestCount) {
+                bestKey = entry.getKey();
+                bestCount = entry.getValue();
+            }
+        }
+
+        int red = ((bestKey >> 10) & 31) * 255 / 31;
+        int green = ((bestKey >> 5) & 31) * 255 / 31;
+        int blue = (bestKey & 31) * 255 / 31;
+
+        block.backgroundColor =
+                Color.rgb(red, green, blue);
+
+        // Measure variation using samples around the ring. Product photos have
+        // large variance; normal white/gray/black UI backgrounds do not.
+        for (int x = left; x <= right; x += stepX) {
+            int[] pair = new int[]{
+                    screenshot.getPixel(x, top),
+                    screenshot.getPixel(x, bottom)
+            };
+
+            for (int c : pair) {
+                int lum =
+                        (Color.red(c) * 299
+                                + Color.green(c) * 587
+                                + Color.blue(c) * 114) / 1000;
+                minLum = Math.min(minLum, lum);
+                maxLum = Math.max(maxLum, lum);
+            }
         }
 
         int backgroundLum =
-                (red * 299 + green * 587 + blue * 114) / 1000;
+                (red * 299
+                        + green * 587
+                        + blue * 114) / 1000;
 
         block.solidBackground =
-                (maxLum - minLum) < 48;
+                bestCount >= Math.max(3, samples / 5)
+                        && (maxLum - minLum) < 72;
 
         block.textColor =
                 backgroundLum >= 145
-                        ? Color.rgb(28, 28, 30)
+                        ? Color.rgb(26, 26, 28)
                         : Color.WHITE;
 
         block.sourceTextSizePx =
@@ -910,6 +924,24 @@ public class OverlayCaptureService extends Service {
                                 r.height() * 0.70f
                         )
                 );
+    }
+
+    private int addColorSample(
+            int color,
+            java.util.HashMap<Integer, Integer> bins
+    ) {
+        int r5 = Color.red(color) * 31 / 255;
+        int g5 = Color.green(color) * 31 / 255;
+        int b5 = Color.blue(color) * 31 / 255;
+        int key = (r5 << 10) | (g5 << 5) | b5;
+
+        Integer current = bins.get(key);
+        bins.put(
+                key,
+                current == null ? 1 : current + 1
+        );
+
+        return 1;
     }
 
     private void showBubble() {
@@ -1136,6 +1168,7 @@ public class OverlayCaptureService extends Service {
         }
 
         liveGeneration++;
+        latestFrameId++;
         captureRequested = false;
         liveEnabled = enabled;
 
