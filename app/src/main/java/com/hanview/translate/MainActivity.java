@@ -29,6 +29,7 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         updateManager = new AppUpdateManager(this);
+        TranslationEngine.prewarmCommon(this);
         setContentView(buildUi());
         requestNotificationPermissionIfNeeded();
 
