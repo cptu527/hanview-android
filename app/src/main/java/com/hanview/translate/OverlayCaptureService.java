@@ -477,11 +477,12 @@ public class OverlayCaptureService extends Service {
                     )
                     .addOnCompleteListener(task -> {
                         if (remaining.decrementAndGet() == 0) {
-                            bitmap.recycle();
                             finishRecognition(
                                     candidates,
-                                    generation
+                                    generation,
+                                    bitmap
                             );
+                            bitmap.recycle();
                         }
                     });
         }
@@ -489,7 +490,8 @@ public class OverlayCaptureService extends Service {
 
     private void finishRecognition(
             List<OcrBlock> candidates,
-            int generation
+            int generation,
+            Bitmap screenshot
     ) {
         if (!isCurrentGeneration(generation)) {
             processing = false;
@@ -517,12 +519,21 @@ public class OverlayCaptureService extends Service {
         for (int i = 0; i < blocks.size(); i++) {
             OcrBlock old = blocks.get(i);
 
-            normalized.add(
+            OcrBlock normalizedBlock =
                     new OcrBlock(
                             i,
                             old.original,
                             old.bounds
-                    )
+                    );
+
+            normalizedBlock.copyVisualStyleFrom(old);
+            normalized.add(normalizedBlock);
+        }
+
+        for (OcrBlock block : normalized) {
+            sampleVisualStyle(
+                    screenshot,
+                    block
             );
         }
 
@@ -751,6 +762,96 @@ public class OverlayCaptureService extends Service {
         }
 
         return score;
+    }
+
+    private void sampleVisualStyle(
+            Bitmap screenshot,
+            OcrBlock block
+    ) {
+        Rect r = block.bounds;
+
+        int margin = Math.max(2, dp(2));
+        int left = Math.max(0, r.left - margin);
+        int top = Math.max(0, r.top - margin);
+        int right = Math.min(screenshot.getWidth() - 1, r.right + margin);
+        int bottom = Math.min(screenshot.getHeight() - 1, r.bottom + margin);
+
+        int[] colors = new int[64];
+        int count = 0;
+
+        // Sample a ring around the OCR bounds. This mostly sees the real card/page
+        // background rather than the glyph pixels themselves.
+        for (int x = left; x <= right && count < colors.length; x += Math.max(1, (right - left) / 12 + 1)) {
+            colors[count++] = screenshot.getPixel(x, top);
+            if (count < colors.length) {
+                colors[count++] = screenshot.getPixel(x, bottom);
+            }
+        }
+
+        for (int y = top; y <= bottom && count < colors.length; y += Math.max(1, (bottom - top) / 8 + 1)) {
+            colors[count++] = screenshot.getPixel(left, y);
+            if (count < colors.length) {
+                colors[count++] = screenshot.getPixel(right, y);
+            }
+        }
+
+        if (count == 0) {
+            block.backgroundColor = Color.WHITE;
+            block.textColor = Color.rgb(28, 28, 30);
+            block.sourceTextSizePx = Math.max(dp(10), r.height() * 0.68f);
+            block.solidBackground = true;
+            return;
+        }
+
+        int[] rs = new int[count];
+        int[] gs = new int[count];
+        int[] bs = new int[count];
+
+        for (int i = 0; i < count; i++) {
+            rs[i] = Color.red(colors[i]);
+            gs[i] = Color.green(colors[i]);
+            bs[i] = Color.blue(colors[i]);
+        }
+
+        java.util.Arrays.sort(rs);
+        java.util.Arrays.sort(gs);
+        java.util.Arrays.sort(bs);
+
+        int mid = count / 2;
+        int red = rs[mid];
+        int green = gs[mid];
+        int blue = bs[mid];
+
+        block.backgroundColor = Color.rgb(red, green, blue);
+
+        int minLum = 255;
+        int maxLum = 0;
+
+        for (int i = 0; i < count; i++) {
+            int lum = (rs[i] * 299 + gs[i] * 587 + bs[i] * 114) / 1000;
+            minLum = Math.min(minLum, lum);
+            maxLum = Math.max(maxLum, lum);
+        }
+
+        int backgroundLum =
+                (red * 299 + green * 587 + blue * 114) / 1000;
+
+        block.solidBackground =
+                (maxLum - minLum) < 48;
+
+        block.textColor =
+                backgroundLum >= 145
+                        ? Color.rgb(28, 28, 30)
+                        : Color.WHITE;
+
+        block.sourceTextSizePx =
+                Math.max(
+                        dp(10),
+                        Math.min(
+                                dp(19),
+                                r.height() * 0.70f
+                        )
+                );
     }
 
     private void showBubble() {
