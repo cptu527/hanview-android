@@ -23,12 +23,56 @@ public class MainActivity extends Activity {
     private static final int REQ_NOTIFICATIONS = 1003;
 
     private TextView overlayStatus;
+    private TextView updateBadge;
+    private Button updateButton;
     private AppUpdateManager updateManager;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        updateManager = new AppUpdateManager(this);
+        updateManager = new AppUpdateManager(
+                this,
+                new AppUpdateManager.Listener() {
+                    @Override
+                    public void onChecking() {
+                        if (updateButton != null) {
+                            updateButton.setText("업데이트 확인 중...");
+                            updateButton.setEnabled(false);
+                        }
+                    }
+
+                    @Override
+                    public void onUpdateAvailable(String versionName) {
+                        if (updateBadge != null) {
+                            updateBadge.setVisibility(View.VISIBLE);
+                            updateBadge.setText("● 새 업데이트 있음  v" + versionName);
+                        }
+                        if (updateButton != null) {
+                            updateButton.setEnabled(true);
+                            updateButton.setText("업데이트 받기");
+                        }
+                    }
+
+                    @Override
+                    public void onUpToDate() {
+                        if (updateBadge != null) {
+                            updateBadge.setVisibility(View.GONE);
+                        }
+                        if (updateButton != null) {
+                            updateButton.setEnabled(true);
+                            updateButton.setText("업데이트 확인");
+                        }
+                    }
+
+                    @Override
+                    public void onError() {
+                        if (updateButton != null) {
+                            updateButton.setEnabled(true);
+                            updateButton.setText("업데이트 확인");
+                        }
+                    }
+                }
+        );
         TranslationEngine.prewarmCommon(this);
         setContentView(buildUi());
         requestNotificationPermissionIfNeeded();
@@ -108,14 +152,20 @@ public class MainActivity extends Activity {
         root.addView(guide, guideLp);
 
         root.addView(sectionTitle("업데이트"));
+
+        updateBadge = text("● 새 업데이트 있음", 15, Color.rgb(220, 38, 38));
+        updateBadge.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        updateBadge.setVisibility(View.GONE);
+        root.addView(updateBadge, spaced());
+
         TextView version = infoBox(
                 "현재 버전 " + BuildConfig.VERSION_NAME + " (" + BuildConfig.VERSION_CODE + ")"
         );
         root.addView(version, spaced());
 
-        Button update = button("업데이트 확인");
-        update.setOnClickListener(v -> updateManager.checkForUpdate(true));
-        root.addView(update, spaced());
+        updateButton = button("업데이트 확인");
+        updateButton.setOnClickListener(v -> updateManager.checkForUpdate(true));
+        root.addView(updateButton, spaced());
 
         TextView privacy = text(
                 "화면은 번역을 위해서만 읽습니다. 번역 레이어는 원래 앱을 직접 수정하지 않고 화면 위에 표시됩니다.",
@@ -134,7 +184,7 @@ public class MainActivity extends Activity {
         super.onResume();
         updateStatus();
         if (updateManager != null) {
-            updateManager.tryInstallPendingDownload();
+            updateManager.resumePendingUpdateFlow();
         }
     }
 
@@ -223,6 +273,14 @@ public class MainActivity extends Activity {
                     REQ_NOTIFICATIONS
             );
         }
+    }
+
+    @Override
+    protected void onDestroy() {
+        if (updateManager != null) {
+            updateManager.destroy();
+        }
+        super.onDestroy();
     }
 
     private TextView sectionTitle(String value) {
