@@ -61,8 +61,8 @@ public class OverlayCaptureService extends Service {
             "viewnyang_live_translation";
     private static final int NOTIFICATION_ID = 527;
 
-    private static final long LIVE_INTERVAL_MS = 500L;
-    private static final long OVERLAY_HIDE_BEFORE_CAPTURE_MS = 45L;
+    private static final long LIVE_INTERVAL_MS = 300L;
+    private static final long OVERLAY_HIDE_BEFORE_CAPTURE_MS = 20L;
 
     private final Handler mainHandler =
             new Handler(Looper.getMainLooper());
@@ -186,12 +186,18 @@ public class OverlayCaptureService extends Service {
 
             if (mediaProjection == null) {
                 startProjection(resultCode, resultData);
+
+                // Start live mode immediately. The floating button must never begin as OFF
+                // after the user already chose "실시간 번역 시작".
+                liveEnabled = true;
+                liveGeneration++;
+
                 showTranslationOverlay();
                 showBubble();
 
-                mainHandler.postDelayed(
-                        () -> setLiveEnabled(true),
-                        450L
+                captureHandler.postDelayed(
+                        liveLoop,
+                        80L
                 );
             }
         }
@@ -448,9 +454,47 @@ public class OverlayCaptureService extends Service {
                         0
                 );
 
+        // Taobao and similar shopping apps are overwhelmingly Chinese.
+        // Run the Chinese recognizer first instead of waiting for four OCR engines.
+        TextRecognizer chineseRecognizer = recognizers.get(1);
+
+        chineseRecognizer.process(input)
+                .addOnSuccessListener(text -> {
+                    List<OcrBlock> chinese =
+                            extractForeignLines(text);
+
+                    if (!chinese.isEmpty()) {
+                        finishRecognition(
+                                chinese,
+                                generation,
+                                bitmap
+                        );
+                        bitmap.recycle();
+                    } else {
+                        runFallbackRecognizers(
+                                input,
+                                bitmap,
+                                generation
+                        );
+                    }
+                })
+                .addOnFailureListener(e ->
+                        runFallbackRecognizers(
+                                input,
+                                bitmap,
+                                generation
+                        )
+                );
+    }
+
+    private void runFallbackRecognizers(
+            InputImage input,
+            Bitmap bitmap,
+            int generation
+    ) {
         AtomicInteger remaining =
                 new AtomicInteger(
-                        recognizers.size()
+                        Math.max(0, recognizers.size() - 1)
                 );
 
         List<OcrBlock> candidates =
@@ -458,23 +502,37 @@ public class OverlayCaptureService extends Service {
                         new ArrayList<>()
                 );
 
-        for (TextRecognizer recognizer : recognizers) {
-            recognizer.process(input)
-                    .addOnSuccessListener(
-                            text -> {
-                                List<OcrBlock> found =
-                                        extractForeignLines(text);
+        if (remaining.get() == 0) {
+            finishRecognition(
+                    candidates,
+                    generation,
+                    bitmap
+            );
+            bitmap.recycle();
+            return;
+        }
 
-                                synchronized (candidates) {
-                                    for (OcrBlock block : found) {
-                                        addOrReplaceOverlapping(
-                                                candidates,
-                                                block
-                                        );
-                                    }
-                                }
+        for (int i = 0; i < recognizers.size(); i++) {
+            if (i == 1) {
+                continue;
+            }
+
+            TextRecognizer recognizer = recognizers.get(i);
+
+            recognizer.process(input)
+                    .addOnSuccessListener(text -> {
+                        List<OcrBlock> found =
+                                extractForeignLines(text);
+
+                        synchronized (candidates) {
+                            for (OcrBlock block : found) {
+                                addOrReplaceOverlapping(
+                                        candidates,
+                                        block
+                                );
                             }
-                    )
+                        }
+                    })
                     .addOnCompleteListener(task -> {
                         if (remaining.decrementAndGet() == 0) {
                             finishRecognition(
@@ -870,7 +928,7 @@ public class OverlayCaptureService extends Service {
                 "실시간 번역 켜기 또는 끄기"
         );
 
-        styleBubble(false);
+        styleBubble(liveEnabled);
 
         int type =
                 Build.VERSION.SDK_INT
