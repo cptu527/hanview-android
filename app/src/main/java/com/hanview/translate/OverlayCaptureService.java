@@ -5,8 +5,10 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
+import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.pm.ServiceInfo;
 import android.graphics.Bitmap;
 import android.graphics.Color;
@@ -24,6 +26,7 @@ import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.IBinder;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.util.DisplayMetrics;
 import android.view.Gravity;
 import android.view.MotionEvent;
@@ -79,15 +82,59 @@ public class OverlayCaptureService extends Service {
     private volatile int generation = 0;
 
     private int[] lastMonitorFingerprint = null;
+    private final List<Rect> activePatchBounds =
+            Collections.synchronizedList(new ArrayList<>());
+    private volatile long suspendTranslationUntilMs = 0L;
 
     private int captureWidth;
     private int captureHeight;
     private int densityDpi;
 
+    private final BroadcastReceiver systemUiReceiver =
+            new BroadcastReceiver() {
+                @Override
+                public void onReceive(
+                        Context context,
+                        Intent intent
+                ) {
+                    if (!Intent.ACTION_CLOSE_SYSTEM_DIALOGS.equals(
+                            intent.getAction()
+                    )) {
+                        return;
+                    }
+
+                    // Home/Recents must never keep old translated text floating
+                    // above the system overview.
+                    suspendTranslationUntilMs =
+                            SystemClock.uptimeMillis() + 1200L;
+                    generation++;
+                    captureRequested = false;
+                    processing = false;
+                    cleanCaptureRequested = true;
+                    lastMonitorFingerprint = null;
+                    activePatchBounds.clear();
+
+                    mainHandler.post(() -> {
+                        if (patchManager != null) {
+                            patchManager.clear();
+                        }
+                    });
+                }
+            };
+
     private final Runnable liveLoop = new Runnable() {
         @Override
         public void run() {
             if (!liveEnabled || captureHandler == null) {
+                return;
+            }
+
+            if (SystemClock.uptimeMillis()
+                    < suspendTranslationUntilMs) {
+                captureHandler.postDelayed(
+                        this,
+                        LIVE_INTERVAL_MS
+                );
                 return;
             }
 
@@ -130,6 +177,14 @@ public class OverlayCaptureService extends Service {
         captureThread = new HandlerThread("viewnyang-live-capture");
         captureThread.start();
         captureHandler = new Handler(captureThread.getLooper());
+
+        IntentFilter systemFilter =
+                new IntentFilter(Intent.ACTION_CLOSE_SYSTEM_DIALOGS);
+
+        registerReceiver(
+                systemUiReceiver,
+                systemFilter
+        );
     }
 
     @Override
@@ -343,7 +398,10 @@ public class OverlayCaptureService extends Service {
         }
 
         int[] fingerprint =
-                makeFingerprint(bitmap);
+                makeFingerprint(
+                        bitmap,
+                        activePatchBounds
+                );
 
         bitmap.recycle();
 
@@ -361,7 +419,7 @@ public class OverlayCaptureService extends Service {
 
         lastMonitorFingerprint = fingerprint;
 
-        if (change < 18.0f) {
+        if (change < 7.5f) {
             processing = false;
             return;
         }
@@ -378,6 +436,7 @@ public class OverlayCaptureService extends Service {
         });
 
         lastMonitorFingerprint = null;
+        activePatchBounds.clear();
         cleanCaptureRequested = true;
         processing = false;
         captureRequested = false;
@@ -394,9 +453,12 @@ public class OverlayCaptureService extends Service {
         );
     }
 
-    private int[] makeFingerprint(Bitmap bitmap) {
-        final int columns = 10;
-        final int rows = 14;
+    private int[] makeFingerprint(
+            Bitmap bitmap,
+            List<Rect> ignoreBounds
+    ) {
+        final int columns = 12;
+        final int rows = 18;
         int[] out = new int[columns * rows];
 
         int startY =
@@ -404,6 +466,7 @@ public class OverlayCaptureService extends Service {
                         0,
                         bitmap.getHeight() / 10
                 );
+
         int usableHeight =
                 Math.max(
                         1,
@@ -441,6 +504,15 @@ public class OverlayCaptureService extends Service {
                         Math.max(0, px)
                 );
 
+                if (isInsideIgnoredRegion(
+                        px,
+                        py,
+                        ignoreBounds
+                )) {
+                    out[index++] = -1;
+                    continue;
+                }
+
                 int c =
                         bitmap.getPixel(px, py);
 
@@ -456,6 +528,35 @@ public class OverlayCaptureService extends Service {
         return out;
     }
 
+    private boolean isInsideIgnoredRegion(
+            int x,
+            int y,
+            List<Rect> ignoreBounds
+    ) {
+        if (ignoreBounds == null
+                || ignoreBounds.isEmpty()) {
+            return false;
+        }
+
+        synchronized (ignoreBounds) {
+            for (Rect source : ignoreBounds) {
+                Rect expanded =
+                        new Rect(
+                                source.left - dp(8),
+                                source.top - dp(8),
+                                source.right + dp(8),
+                                source.bottom + dp(8)
+                        );
+
+                if (expanded.contains(x, y)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
     private float fingerprintDifference(
             int[] a,
             int[] b
@@ -468,14 +569,24 @@ public class OverlayCaptureService extends Service {
         }
 
         long total = 0L;
+        int compared = 0;
 
         for (int i = 0; i < a.length; i++) {
+            if (a[i] < 0 || b[i] < 0) {
+                continue;
+            }
+
             total += Math.abs(
                     a[i] - b[i]
             );
+            compared++;
         }
 
-        return (float) total / a.length;
+        if (compared == 0) {
+            return 255f;
+        }
+
+        return (float) total / compared;
     }
 
     private Bitmap imageToBitmap(Image image) {
@@ -610,6 +721,9 @@ public class OverlayCaptureService extends Service {
                         )
         );
 
+        blocks =
+                mergeVerticalColumns(blocks);
+
         List<OcrBlock> normalized =
                 new ArrayList<>();
 
@@ -625,6 +739,11 @@ public class OverlayCaptureService extends Service {
                     old.bounds
             );
 
+            block.verticalSource =
+                    old.verticalSource;
+            block.sourceGlyphWidthPx =
+                    old.sourceGlyphWidthPx;
+
             sampleVisualStyle(
                     screenshot,
                     block
@@ -636,6 +755,20 @@ public class OverlayCaptureService extends Service {
                 break;
             }
         }
+
+        activePatchBounds.clear();
+
+        for (OcrBlock block : normalized) {
+            activePatchBounds.add(
+                    new Rect(block.bounds)
+            );
+        }
+
+        lastMonitorFingerprint =
+                makeFingerprint(
+                        screenshot,
+                        activePatchBounds
+                );
 
         if (!screenshot.isRecycled()) {
             screenshot.recycle();
@@ -674,7 +807,6 @@ public class OverlayCaptureService extends Service {
                                         captureWidth,
                                         captureHeight
                                 );
-                                lastMonitorFingerprint = null;
                                 cleanCaptureRequested = false;
                             }
                         });
@@ -688,6 +820,205 @@ public class OverlayCaptureService extends Service {
                     }
                 }
         );
+    }
+
+    private List<OcrBlock> mergeVerticalColumns(
+            List<OcrBlock> source
+    ) {
+        List<OcrBlock> horizontal =
+                new ArrayList<>();
+        List<OcrBlock> vertical =
+                new ArrayList<>();
+
+        for (OcrBlock block : source) {
+            if (block.verticalSource) {
+                vertical.add(block);
+            } else {
+                horizontal.add(block);
+            }
+        }
+
+        boolean[] used =
+                new boolean[vertical.size()];
+
+        for (int i = 0; i < vertical.size(); i++) {
+            if (used[i]) {
+                continue;
+            }
+
+            List<OcrBlock> group =
+                    new ArrayList<>();
+            group.add(vertical.get(i));
+            used[i] = true;
+
+            boolean expanded;
+
+            do {
+                expanded = false;
+
+                Rect groupBounds =
+                        unionBounds(group);
+
+                for (int j = 0; j < vertical.size(); j++) {
+                    if (used[j]) {
+                        continue;
+                    }
+
+                    OcrBlock candidate =
+                            vertical.get(j);
+
+                    float overlap =
+                            verticalOverlapRatio(
+                                    groupBounds,
+                                    candidate.bounds
+                            );
+
+                    int gap =
+                            horizontalGap(
+                                    groupBounds,
+                                    candidate.bounds
+                            );
+
+                    if (overlap >= 0.55f
+                            && gap <= dp(44)) {
+                        group.add(candidate);
+                        used[j] = true;
+                        expanded = true;
+                    }
+                }
+            } while (expanded);
+
+            if (group.size() == 1) {
+                horizontal.add(group.get(0));
+                continue;
+            }
+
+            group.sort(
+                    (a, b) ->
+                            Integer.compare(
+                                    b.bounds.left,
+                                    a.bounds.left
+                            )
+            );
+
+            StringBuilder combined =
+                    new StringBuilder();
+
+            float glyphWidth = Float.MAX_VALUE;
+
+            for (OcrBlock block : group) {
+                if (combined.length() > 0) {
+                    combined.append(' ');
+                }
+
+                combined.append(
+                        block.original
+                );
+
+                glyphWidth =
+                        Math.min(
+                                glyphWidth,
+                                block.bounds.width()
+                        );
+            }
+
+            Rect bounds =
+                    unionBounds(group);
+
+            OcrBlock merged =
+                    new OcrBlock(
+                            0,
+                            combined.toString(),
+                            bounds
+                    );
+
+            merged.verticalSource = true;
+            merged.sourceGlyphWidthPx =
+                    glyphWidth == Float.MAX_VALUE
+                            ? bounds.width()
+                            : glyphWidth;
+
+            horizontal.add(merged);
+        }
+
+        horizontal.sort(
+                Comparator
+                        .comparingInt(
+                                (OcrBlock b) ->
+                                        b.bounds.top
+                        )
+                        .thenComparingInt(
+                                b -> b.bounds.left
+                        )
+        );
+
+        return horizontal;
+    }
+
+    private Rect unionBounds(
+            List<OcrBlock> blocks
+    ) {
+        Rect out =
+                new Rect(
+                        blocks.get(0).bounds
+                );
+
+        for (int i = 1; i < blocks.size(); i++) {
+            out.union(
+                    blocks.get(i).bounds
+            );
+        }
+
+        return out;
+    }
+
+    private float verticalOverlapRatio(
+            Rect a,
+            Rect b
+    ) {
+        int top =
+                Math.max(
+                        a.top,
+                        b.top
+                );
+        int bottom =
+                Math.min(
+                        a.bottom,
+                        b.bottom
+                );
+
+        int overlap =
+                Math.max(
+                        0,
+                        bottom - top
+                );
+
+        int smaller =
+                Math.max(
+                        1,
+                        Math.min(
+                                a.height(),
+                                b.height()
+                        )
+                );
+
+        return (float) overlap
+                / smaller;
+    }
+
+    private int horizontalGap(
+            Rect a,
+            Rect b
+    ) {
+        if (a.right < b.left) {
+            return b.left - a.right;
+        }
+
+        if (b.right < a.left) {
+            return a.left - b.right;
+        }
+
+        return 0;
     }
 
     private List<OcrBlock> extractForeignLines(Text result) {
@@ -715,13 +1046,23 @@ public class OverlayCaptureService extends Service {
                     continue;
                 }
 
-                out.add(
+                OcrBlock recognized =
                         new OcrBlock(
                                 id++,
                                 value,
                                 rect
-                        )
-                );
+                        );
+
+                recognized.verticalSource =
+                        rect.height()
+                                > rect.width() * 1.8f;
+
+                recognized.sourceGlyphWidthPx =
+                        recognized.verticalSource
+                                ? rect.width()
+                                : rect.height();
+
+                out.add(recognized);
 
                 if (out.size() >= 80) {
                     return out;
@@ -1188,6 +1529,7 @@ public class OverlayCaptureService extends Service {
         processing = false;
         cleanCaptureRequested = true;
         lastMonitorFingerprint = null;
+        activePatchBounds.clear();
         liveEnabled = enabled;
 
         if (captureHandler != null) {
@@ -1227,6 +1569,12 @@ public class OverlayCaptureService extends Service {
         processing = false;
         cleanCaptureRequested = true;
         lastMonitorFingerprint = null;
+        activePatchBounds.clear();
+
+        try {
+            unregisterReceiver(systemUiReceiver);
+        } catch (Exception ignored) {
+        }
 
         if (captureHandler != null) {
             captureHandler.removeCallbacks(liveLoop);
