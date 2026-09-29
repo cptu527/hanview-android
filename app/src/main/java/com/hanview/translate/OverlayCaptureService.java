@@ -322,6 +322,12 @@ public class OverlayCaptureService extends Service {
                         | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
                         | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
                 PixelFormat.TRANSLUCENT);
+        // Android 12+ only forwards touches through TYPE_APPLICATION_OVERLAY
+        // when the obscuring opacity is at or below the platform threshold.
+        // Keep the translation layer readable while allowing Taobao/1688 beneath it to scroll and tap.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            params.alpha = 0.78f;
+        }
         params.gravity = Gravity.TOP | Gravity.START;
         windowManager.addView(translationOverlay, params);
     }
