@@ -7,11 +7,11 @@ android {
     compileSdk = 37
 
     defaultConfig {
-        applicationId = "com.hanview.translate"
+        applicationId = "com.viewnyang.app"
         minSdk = 23
         targetSdk = 37
-        versionCode = 5
-        versionName = "0.2.3"
+        versionCode = 40
+        versionName = "0.4.0"
     }
 
     signingConfigs {
