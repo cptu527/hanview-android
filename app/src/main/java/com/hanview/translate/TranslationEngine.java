@@ -20,7 +20,9 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
@@ -40,6 +42,17 @@ public class TranslationEngine {
     private final ExecutorService networkExecutor = Executors.newSingleThreadExecutor();
     private final Translator localTranslator;
 
+    // Live translation sees the same labels many times while the user scrolls.
+    // Cache them so old text moves instantly instead of being translated again every frame.
+    private final Map<String, String> translationCache = Collections.synchronizedMap(
+            new LinkedHashMap<String, String>(256, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<String, String> eldest) {
+                    return size() > 600;
+                }
+            }
+    );
+
     public TranslationEngine(Context context) {
         this.context = context.getApplicationContext();
         TranslatorOptions options = new TranslatorOptions.Builder()
@@ -54,10 +67,47 @@ public class TranslationEngine {
             callback.onSuccess(blocks, false);
             return;
         }
+
+        List<OcrBlock> pending = new ArrayList<>();
+        for (OcrBlock block : blocks) {
+            String cached = getCached(block.original);
+            if (cached != null) {
+                block.translated = cached;
+            } else {
+                pending.add(block);
+            }
+        }
+
+        if (pending.isEmpty()) {
+            callback.onSuccess(blocks, false);
+            return;
+        }
+
         SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         String endpoint = prefs.getString(KEY_ENDPOINT, "").trim();
-        if (!endpoint.isEmpty()) translateRemote(endpoint, blocks, callback);
-        else translateLocal(blocks, callback);
+
+        Callback mergeBack = new Callback() {
+            @Override
+            public void onSuccess(List<OcrBlock> translatedPending, boolean usedAi) {
+                for (OcrBlock block : translatedPending) {
+                    if (block.translated != null && !block.translated.trim().isEmpty()) {
+                        putCached(block.original, block.translated);
+                    }
+                }
+                callback.onSuccess(blocks, usedAi);
+            }
+
+            @Override
+            public void onError(String message) {
+                callback.onError(message);
+            }
+        };
+
+        if (!endpoint.isEmpty()) {
+            translateRemote(endpoint, pending, mergeBack);
+        } else {
+            translateLocal(pending, mergeBack);
+        }
     }
 
     private void translateRemote(String endpoint, List<OcrBlock> blocks, Callback callback) {
@@ -67,6 +117,7 @@ public class TranslationEngine {
                 root.put("source", "zh");
                 root.put("target", "ko");
                 root.put("mode", "chinese-shopping");
+
                 JSONArray items = new JSONArray();
                 for (OcrBlock block : blocks) {
                     JSONObject item = new JSONObject();
@@ -78,11 +129,12 @@ public class TranslationEngine {
 
                 HttpURLConnection conn = (HttpURLConnection) new URL(endpoint).openConnection();
                 conn.setRequestMethod("POST");
-                conn.setConnectTimeout(12000);
-                conn.setReadTimeout(30000);
+                conn.setConnectTimeout(8000);
+                conn.setReadTimeout(20000);
                 conn.setDoOutput(true);
                 conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");
                 conn.setRequestProperty("Accept", "application/json");
+
                 byte[] payload = root.toString().getBytes(StandardCharsets.UTF_8);
                 conn.setFixedLengthStreamingMode(payload.length);
                 try (OutputStream out = conn.getOutputStream()) {
@@ -92,7 +144,9 @@ public class TranslationEngine {
                 int code = conn.getResponseCode();
                 InputStream stream = code >= 200 && code < 300 ? conn.getInputStream() : conn.getErrorStream();
                 String response = readAll(stream);
-                if (code < 200 || code >= 300) throw new IllegalStateException("AI server HTTP " + code + ": " + response);
+                if (code < 200 || code >= 300) {
+                    throw new IllegalStateException("AI server HTTP " + code + ": " + response);
+                }
 
                 JSONArray translations = new JSONObject(response).getJSONArray("translations");
                 Map<Integer, String> byId = new HashMap<>();
@@ -100,10 +154,14 @@ public class TranslationEngine {
                     JSONObject t = translations.getJSONObject(i);
                     byId.put(t.getInt("id"), t.getString("text"));
                 }
+
                 for (OcrBlock block : blocks) {
                     String translated = byId.get(block.id);
-                    if (translated != null && !translated.trim().isEmpty()) block.translated = translated.trim();
+                    if (translated != null && !translated.trim().isEmpty()) {
+                        block.translated = translated.trim();
+                    }
                 }
+
                 callback.onSuccess(blocks, true);
             } catch (Exception remoteError) {
                 translateLocal(blocks, new Callback() {
@@ -111,9 +169,11 @@ public class TranslationEngine {
                     public void onSuccess(List<OcrBlock> translated, boolean ignored) {
                         callback.onSuccess(translated, false);
                     }
+
                     @Override
                     public void onError(String localMessage) {
-                        callback.onError("AI 번역 실패: " + remoteError.getMessage() + "\n기기 번역도 실패: " + localMessage);
+                        callback.onError("AI 번역 실패: " + remoteError.getMessage()
+                                + "\n기기 번역도 실패: " + localMessage);
                     }
                 });
             }
@@ -123,38 +183,66 @@ public class TranslationEngine {
     private void translateLocal(List<OcrBlock> blocks, Callback callback) {
         localTranslator.downloadModelIfNeeded(new DownloadConditions.Builder().build())
                 .addOnSuccessListener(unused -> runLocalTranslations(blocks, callback))
-                .addOnFailureListener(e -> callback.onError("중국어/한국어 번역 모델을 내려받지 못했어요: " + e.getMessage()));
+                .addOnFailureListener(e -> callback.onError(
+                        "중국어/한국어 번역 모델을 내려받지 못했어요: " + e.getMessage()
+                ));
     }
 
     private void runLocalTranslations(List<OcrBlock> blocks, Callback callback) {
         AtomicInteger remaining = new AtomicInteger(blocks.size());
         List<String> failures = new ArrayList<>();
+
         for (OcrBlock block : blocks) {
             localTranslator.translate(block.original)
                     .addOnSuccessListener(text -> {
-                        block.translated = text == null || text.trim().isEmpty() ? block.original : text.trim();
-                        if (remaining.decrementAndGet() == 0) finishLocal(blocks, failures, callback);
+                        block.translated = text == null || text.trim().isEmpty()
+                                ? block.original
+                                : text.trim();
+                        if (remaining.decrementAndGet() == 0) {
+                            finishLocal(blocks, failures, callback);
+                        }
                     })
                     .addOnFailureListener(e -> {
                         synchronized (failures) {
                             failures.add(e.getMessage() == null ? "unknown" : e.getMessage());
                         }
-                        if (remaining.decrementAndGet() == 0) finishLocal(blocks, failures, callback);
+                        if (remaining.decrementAndGet() == 0) {
+                            finishLocal(blocks, failures, callback);
+                        }
                     });
         }
     }
 
     private void finishLocal(List<OcrBlock> blocks, List<String> failures, Callback callback) {
-        if (failures.size() == blocks.size()) callback.onError("기기 내 번역에 실패했어요.");
-        else callback.onSuccess(blocks, false);
+        if (failures.size() == blocks.size()) {
+            callback.onError("기기 내 번역에 실패했어요.");
+        } else {
+            callback.onSuccess(blocks, false);
+        }
+    }
+
+    private String getCached(String source) {
+        return translationCache.get(normalize(source));
+    }
+
+    private void putCached(String source, String translated) {
+        translationCache.put(normalize(source), translated);
+    }
+
+    private String normalize(String value) {
+        if (value == null) return "";
+        return value.trim().replaceAll("\\s+", " ");
     }
 
     private static String readAll(InputStream in) throws Exception {
         if (in == null) return "";
         StringBuilder sb = new StringBuilder();
-        try (BufferedReader reader = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8))) {
+        try (BufferedReader reader = new BufferedReader(
+                new InputStreamReader(in, StandardCharsets.UTF_8))) {
             String line;
-            while ((line = reader.readLine()) != null) sb.append(line);
+            while ((line = reader.readLine()) != null) {
+                sb.append(line);
+            }
         }
         return sb.toString();
     }
