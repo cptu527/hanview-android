@@ -1,11 +1,11 @@
 package com.hanview.translate;
 
 import android.content.Context;
-import android.graphics.Color;
 import android.graphics.PixelFormat;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
+import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
 import android.view.WindowManager;
@@ -19,107 +19,231 @@ public class TranslationPatchManager {
     private final WindowManager windowManager;
     private final List<View> patches = new ArrayList<>();
     private final float density;
+    private final float scaledDensity;
 
     public TranslationPatchManager(Context context) {
         this.context = context.getApplicationContext();
-        this.windowManager = (WindowManager) context.getSystemService(Context.WINDOW_SERVICE);
-        this.density = context.getResources().getDisplayMetrics().density;
+        this.windowManager =
+                (WindowManager) context.getSystemService(Context.WINDOW_SERVICE);
+        this.density =
+                context.getResources().getDisplayMetrics().density;
+        this.scaledDensity =
+                context.getResources().getDisplayMetrics().scaledDensity;
     }
 
-    public synchronized void show(List<OcrBlock> blocks, int screenWidth, int screenHeight) {
+    public synchronized boolean hasPatches() {
+        return !patches.isEmpty();
+    }
+
+    public synchronized void show(
+            List<OcrBlock> blocks,
+            int screenWidth,
+            int screenHeight
+    ) {
         clear();
 
         for (OcrBlock block : blocks) {
-            if (block.translated == null) continue;
-
-            String translated = block.translated.trim();
-            String original = block.original == null ? "" : block.original.trim();
-
-            if (translated.isEmpty() || translated.equals(original)) {
+            if (block.translated == null) {
                 continue;
             }
 
-            TextView view = new TextView(context);
+            String translated = block.translated.trim();
+            String original =
+                    block.original == null
+                            ? ""
+                            : block.original.trim();
+
+            if (translated.isEmpty()
+                    || translated.equals(original)) {
+                continue;
+            }
+
+            boolean vertical =
+                    block.bounds.height()
+                            > block.bounds.width() * 1.8f;
+
+            // A vertical OCR box can be very tall even when each source glyph is tiny.
+            // Use the narrow dimension for vertical text and the line height for normal text.
+            float sourceTextPx =
+                    vertical
+                            ? block.bounds.width() * 0.82f
+                            : block.bounds.height() * 0.68f;
+
+            sourceTextPx =
+                    Math.max(
+                            dp(8),
+                            Math.min(
+                                    dp(18),
+                                    sourceTextPx
+                            )
+                    );
+
+            TextView view =
+                    new TextView(context);
+
             view.setText(translated);
             view.setTextColor(block.textColor);
-            view.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
-            view.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX,
-                    Math.max(dp(10), Math.min(dp(18),
-                            block.sourceTextSizePx > 0
-                                    ? block.sourceTextSizePx
-                                    : block.bounds.height() * 0.68f)));
-            view.setTypeface(Typeface.DEFAULT, Typeface.NORMAL);
-            view.setMaxLines(block.bounds.height() > block.bounds.width() * 1.8f ? 5 : 2);
-            view.setEllipsize(android.text.TextUtils.TruncateAt.END);
-            view.setPadding(dp(2), 0, dp(2), 0);
+            view.setGravity(
+                    Gravity.CENTER_VERTICAL
+                            | Gravity.START
+            );
+            view.setTypeface(
+                    Typeface.DEFAULT,
+                    Typeface.NORMAL
+            );
+            view.setTextSize(
+                    TypedValue.COMPLEX_UNIT_PX,
+                    sourceTextPx
+            );
+            view.setIncludeFontPadding(false);
+            view.setLineSpacing(0f, 1.0f);
+            view.setPadding(
+                    dp(2),
+                    0,
+                    dp(2),
+                    0
+            );
 
-            GradientDrawable background = new GradientDrawable();
-            background.setColor(block.backgroundColor);
-            background.setCornerRadius(0f);
-            view.setBackground(background);
-
-            int left = Math.max(0, block.bounds.left - dp(1));
-            int top = Math.max(0, block.bounds.top - dp(1));
-
-            boolean vertical = block.bounds.height() > block.bounds.width() * 1.8f;
+            int left =
+                    Math.max(
+                            0,
+                            block.bounds.left - dp(1)
+                    );
+            int top =
+                    Math.max(
+                            0,
+                            block.bounds.top - dp(1)
+                    );
 
             int width;
             int height;
 
             if (vertical) {
-                width = Math.min(dp(150), Math.max(dp(72), block.bounds.height()));
-                height = Math.min(screenHeight - top,
-                        Math.max(block.bounds.height(), dp(84)));
+                // Keep vertical Japanese translations compact instead of using the
+                // entire column height as the Korean font/box width.
+                width =
+                        Math.min(
+                                screenWidth - left,
+                                Math.max(
+                                        dp(54),
+                                        Math.min(
+                                                dp(110),
+                                                block.bounds.width() * 4
+                                        )
+                                )
+                        );
+
+                height =
+                        Math.min(
+                                screenHeight - top,
+                                Math.max(
+                                        block.bounds.height(),
+                                        dp(44)
+                                )
+                        );
+
+                view.setMaxLines(6);
             } else {
-                float measured = view.getPaint().measureText(translated) + dp(8);
-                int preferred = (int) Math.ceil(measured);
-                width = Math.min(screenWidth - left,
-                        Math.max(block.bounds.width() + dp(4),
-                                Math.min(preferred, Math.max(block.bounds.width() * 2, dp(220)))));
-                height = Math.min(screenHeight - top,
-                        Math.max(block.bounds.height() + dp(2), dp(24)));
+                width =
+                        Math.min(
+                                screenWidth - left,
+                                Math.max(
+                                        block.bounds.width() + dp(4),
+                                        Math.min(
+                                                block.bounds.width() * 3 / 2,
+                                                dp(240)
+                                        )
+                                )
+                        );
+
+                height =
+                        Math.min(
+                                screenHeight - top,
+                                Math.max(
+                                        block.bounds.height() + dp(2),
+                                        dp(20)
+                                )
+                        );
+
+                view.setMaxLines(2);
             }
 
             if (width <= 0 || height <= 0) {
                 continue;
             }
 
-            int type = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
-                    ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-                    : WindowManager.LayoutParams.TYPE_PHONE;
+            // Auto-shrink Korean only when it would overflow the source-sized box.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                int maxSp =
+                        Math.max(
+                                8,
+                                Math.round(
+                                        sourceTextPx
+                                                / scaledDensity
+                                )
+                        );
 
-            WindowManager.LayoutParams params = new WindowManager.LayoutParams(
-                    width,
-                    height,
-                    type,
-                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-                            | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
-                            | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
-                            | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
-                    PixelFormat.TRANSLUCENT
+                view.setAutoSizeTextTypeUniformWithConfiguration(
+                        7,
+                        maxSp,
+                        1,
+                        TypedValue.COMPLEX_UNIT_SP
+                );
+            }
+
+            view.setEllipsize(
+                    android.text.TextUtils.TruncateAt.END
             );
 
-            params.gravity = Gravity.TOP | Gravity.START;
+            GradientDrawable background =
+                    new GradientDrawable();
+            background.setColor(
+                    block.backgroundColor
+            );
+            background.setCornerRadius(0f);
+            view.setBackground(background);
+
+            int type =
+                    Build.VERSION.SDK_INT
+                            >= Build.VERSION_CODES.O
+                            ? WindowManager.LayoutParams
+                                    .TYPE_APPLICATION_OVERLAY
+                            : WindowManager.LayoutParams
+                                    .TYPE_PHONE;
+
+            WindowManager.LayoutParams params =
+                    new WindowManager.LayoutParams(
+                            width,
+                            height,
+                            type,
+                            WindowManager.LayoutParams
+                                    .FLAG_NOT_FOCUSABLE
+                                    | WindowManager.LayoutParams
+                                    .FLAG_NOT_TOUCHABLE
+                                    | WindowManager.LayoutParams
+                                    .FLAG_LAYOUT_IN_SCREEN
+                                    | WindowManager.LayoutParams
+                                    .FLAG_LAYOUT_NO_LIMITS,
+                            PixelFormat.TRANSLUCENT
+                    );
+
+            params.gravity =
+                    Gravity.TOP | Gravity.START;
             params.x = left;
             params.y = top;
 
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                params.alpha = 0.79f;
-            }
+            // Keep text patches fully opaque so the original glyphs do not ghost through.
+            // Patches are small, non-touchable windows rather than one full-screen blocker.
+            params.alpha = 1.0f;
 
             try {
-                windowManager.addView(view, params);
+                windowManager.addView(
+                        view,
+                        params
+                );
                 patches.add(view);
             } catch (Exception ignored) {
             }
-        }
-    }
-
-    public synchronized void setVisible(boolean visible) {
-        int visibility = visible ? View.VISIBLE : View.INVISIBLE;
-
-        for (View view : patches) {
-            view.setVisibility(visibility);
         }
     }
 
@@ -130,10 +254,13 @@ public class TranslationPatchManager {
             } catch (Exception ignored) {
             }
         }
+
         patches.clear();
     }
 
     private int dp(int value) {
-        return Math.round(value * density);
+        return Math.round(
+                value * density
+        );
     }
 }
