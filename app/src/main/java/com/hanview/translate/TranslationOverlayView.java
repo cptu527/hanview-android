@@ -8,6 +8,7 @@ import android.graphics.Rect;
 import android.text.Layout;
 import android.text.StaticLayout;
 import android.text.TextPaint;
+import android.text.TextUtils;
 import android.view.View;
 
 import java.util.ArrayList;
@@ -22,10 +23,10 @@ public class TranslationOverlayView extends View {
     public TranslationOverlayView(Context context) {
         super(context);
         density = getResources().getDisplayMetrics().density;
-
-        backgroundPaint.setColor(Color.argb(224, 255, 255, 255));
-        textPaint.setColor(Color.rgb(24, 28, 35));
-        textPaint.setTypeface(android.graphics.Typeface.DEFAULT);
+        textPaint.setTypeface(android.graphics.Typeface.create(
+                android.graphics.Typeface.DEFAULT,
+                android.graphics.Typeface.NORMAL
+        ));
     }
 
     public synchronized void setBlocks(List<OcrBlock> translated) {
@@ -48,42 +49,114 @@ public class TranslationOverlayView extends View {
 
         for (OcrBlock block : blocks) {
             Rect src = block.bounds;
-            String value = block.translated == null ? block.original : block.translated;
-            if (value == null || value.trim().isEmpty()) continue;
+            String value = block.translated == null
+                    ? block.original
+                    : block.translated;
 
-            int padding = dp(3);
-            int left = clamp(src.left - padding, 0, Math.max(0, screenWidth - dp(44)));
-            int maxRight = Math.min(screenWidth, left + Math.max(src.width() + dp(20), dp(70)));
+            if (value == null || value.trim().isEmpty()) {
+                continue;
+            }
 
-            float sourceHeight = Math.max(dp(12), src.height());
-            float textSize = Math.max(sp(10), Math.min(sp(15), sourceHeight * 0.52f));
-            textPaint.setTextSize(textSize);
+            // Browser-translation look: erase the original text region with the
+            // sampled page/card background and redraw Korean in the same place.
+            int horizontalPad = dp(2);
+            int verticalPad = dp(1);
 
-            float measured = textPaint.measureText(value);
-            int targetWidth = Math.max(src.width() + padding * 2,
-                    Math.min((int) measured + padding * 2, dp(240)));
-            int right = clamp(left + targetWidth, left + dp(44), screenWidth);
-            right = Math.max(right, maxRight);
+            int left = clamp(
+                    src.left - horizontalPad,
+                    0,
+                    screenWidth
+            );
+            int top = clamp(
+                    src.top - verticalPad,
+                    0,
+                    screenHeight
+            );
 
-            int textWidth = Math.max(dp(36), right - left - padding * 2);
+            int sourceWidth = Math.max(
+                    dp(18),
+                    src.width() + horizontalPad * 2
+            );
+
+            float sourceTextSize = block.sourceTextSizePx > 0
+                    ? block.sourceTextSizePx
+                    : Math.max(dp(10), src.height() * 0.68f);
+
+            // Korean often needs a little more horizontal space than Chinese/Japanese.
+            // Grow only as much as needed so neighbouring UI is not covered.
+            textPaint.setTextSize(
+                    Math.max(sp(9), Math.min(sp(18), sourceTextSize))
+            );
+            textPaint.setColor(block.textColor);
+
+            int preferredWidth = Math.min(
+                    dp(280),
+                    Math.max(
+                            sourceWidth,
+                            (int) Math.ceil(textPaint.measureText(value)) + dp(4)
+                    )
+            );
+
+            int right = clamp(
+                    left + preferredWidth,
+                    left + dp(18),
+                    screenWidth
+            );
+
+            int textWidth = Math.max(
+                    dp(14),
+                    right - left
+            );
+
             StaticLayout layout = StaticLayout.Builder
-                    .obtain(value, 0, value.length(), textPaint, textWidth)
+                    .obtain(
+                            value,
+                            0,
+                            value.length(),
+                            textPaint,
+                            textWidth
+                    )
                     .setAlignment(Layout.Alignment.ALIGN_NORMAL)
                     .setIncludePad(false)
                     .setLineSpacing(0f, 1.0f)
                     .setMaxLines(2)
-                    .setEllipsize(android.text.TextUtils.TruncateAt.END)
+                    .setEllipsize(TextUtils.TruncateAt.END)
                     .build();
 
-            int desiredHeight = Math.max(src.height() + padding * 2, layout.getHeight() + padding * 2);
-            int top = clamp(src.top - padding, 0, Math.max(0, screenHeight - desiredHeight));
-            int bottom = Math.min(screenHeight, top + desiredHeight);
+            int requiredHeight = Math.max(
+                    src.height() + verticalPad * 2,
+                    layout.getHeight() + verticalPad
+            );
 
-            canvas.drawRoundRect(left, top, right, bottom, dp(4), dp(4), backgroundPaint);
+            int bottom = clamp(
+                    top + requiredHeight,
+                    top + dp(8),
+                    screenHeight
+            );
+
+            backgroundPaint.setColor(block.backgroundColor);
+
+            // No round corners, outline or translucent label. This is deliberately
+            // a flat replacement patch so white UI stays white, gray cards stay gray, etc.
+            canvas.drawRect(
+                    left,
+                    top,
+                    right,
+                    bottom,
+                    backgroundPaint
+            );
 
             canvas.save();
-            canvas.clipRect(left, top, right, bottom);
-            canvas.translate(left + padding, top + padding);
+            canvas.clipRect(
+                    left,
+                    top,
+                    right,
+                    bottom
+            );
+            canvas.translate(
+                    left,
+                    top + Math.max(0, (bottom - top - layout.getHeight()) / 2f)
+            );
             layout.draw(canvas);
             canvas.restore();
         }
