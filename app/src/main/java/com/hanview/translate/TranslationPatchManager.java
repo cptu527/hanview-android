@@ -59,15 +59,27 @@ public class TranslationPatchManager {
             }
 
             boolean vertical =
-                    block.bounds.height()
+                    block.verticalSource
+                            || block.bounds.height()
                             > block.bounds.width() * 1.8f;
 
             // A vertical OCR box can be very tall even when each source glyph is tiny.
             // Use the narrow dimension for vertical text and the line height for normal text.
             float sourceTextPx =
                     vertical
-                            ? block.bounds.width() * 0.82f
-                            : block.bounds.height() * 0.68f;
+                            ? (
+                            block.sourceGlyphWidthPx > 0
+                                    ? block.sourceGlyphWidthPx * 0.82f
+                                    : Math.min(
+                                            block.bounds.width(),
+                                            block.bounds.height()
+                                    ) * 0.82f
+                    )
+                            : (
+                            block.sourceTextSizePx > 0
+                                    ? block.sourceTextSizePx
+                                    : block.bounds.height() * 0.68f
+                    );
 
             sourceTextPx =
                     Math.max(
@@ -119,40 +131,12 @@ public class TranslationPatchManager {
             int height;
 
             if (vertical) {
-                // Keep vertical Japanese translations compact instead of using the
-                // entire column height as the Korean font/box width.
-                width =
-                        Math.min(
-                                screenWidth - left,
-                                Math.max(
-                                        dp(54),
-                                        Math.min(
-                                                dp(110),
-                                                block.bounds.width() * 4
-                                        )
-                                )
-                        );
-
-                height =
-                        Math.min(
-                                screenHeight - top,
-                                Math.max(
-                                        block.bounds.height(),
-                                        dp(44)
-                                )
-                        );
-
-                view.setMaxLines(6);
-            } else {
                 width =
                         Math.min(
                                 screenWidth - left,
                                 Math.max(
                                         block.bounds.width() + dp(4),
-                                        Math.min(
-                                                block.bounds.width() * 3 / 2,
-                                                dp(240)
-                                        )
+                                        dp(70)
                                 )
                         );
 
@@ -161,7 +145,27 @@ public class TranslationPatchManager {
                                 screenHeight - top,
                                 Math.max(
                                         block.bounds.height() + dp(2),
-                                        dp(20)
+                                        dp(36)
+                                )
+                        );
+
+                view.setMaxLines(8);
+            } else {
+                width =
+                        Math.min(
+                                screenWidth - left,
+                                Math.max(
+                                        block.bounds.width() + dp(4),
+                                        dp(24)
+                                )
+                        );
+
+                height =
+                        Math.min(
+                                screenHeight - top,
+                                Math.max(
+                                        block.bounds.height() + dp(2),
+                                        dp(18)
                                 )
                         );
 
@@ -184,7 +188,7 @@ public class TranslationPatchManager {
                         );
 
                 view.setAutoSizeTextTypeUniformWithConfiguration(
-                        7,
+                        6,
                         maxSp,
                         1,
                         TypedValue.COMPLEX_UNIT_SP
