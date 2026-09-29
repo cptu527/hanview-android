@@ -54,8 +54,7 @@ public class OverlayCaptureService extends Service {
 
     private static final String CHANNEL_ID = "viewnyang_live_translation";
     private static final int NOTIFICATION_ID = 527;
-    private static final long LIVE_INTERVAL_MS = 220L;
-    private static final long PATCH_HIDE_MS = 24L;
+    private static final long LIVE_INTERVAL_MS = 180L;
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
@@ -76,7 +75,10 @@ public class OverlayCaptureService extends Service {
     private volatile boolean liveEnabled = false;
     private volatile boolean captureRequested = false;
     private volatile boolean processing = false;
+    private volatile boolean cleanCaptureRequested = true;
     private volatile int generation = 0;
+
+    private int[] lastMonitorFingerprint = null;
 
     private int captureWidth;
     private int captureHeight;
@@ -90,7 +92,7 @@ public class OverlayCaptureService extends Service {
             }
 
             if (!processing && !captureRequested) {
-                beginCapture();
+                requestFrame();
             }
 
             captureHandler.postDelayed(this, LIVE_INTERVAL_MS);
@@ -161,6 +163,8 @@ public class OverlayCaptureService extends Service {
             startProjection(resultCode, resultData);
             liveEnabled = true;
             generation++;
+            cleanCaptureRequested = true;
+            lastMonitorFingerprint = null;
             showBubble();
 
             captureHandler.removeCallbacks(liveLoop);
@@ -272,26 +276,25 @@ public class OverlayCaptureService extends Service {
                         processing = true;
 
                         final int frameGeneration = generation;
+                        final boolean cleanFrame = cleanCaptureRequested;
                         Bitmap bitmap = imageToBitmap(image);
 
-                        mainHandler.post(() -> {
-                            if (patchManager != null && liveEnabled) {
-                                patchManager.setVisible(true);
-                            }
-                        });
-
-                        processBitmap(
-                                bitmap,
-                                frameGeneration
-                        );
+                        if (!cleanFrame && patchManager != null
+                                && patchManager.hasPatches()) {
+                            handleMonitorFrame(
+                                    bitmap,
+                                    frameGeneration
+                            );
+                        } else {
+                            processBitmap(
+                                    bitmap,
+                                    frameGeneration
+                            );
+                        }
                     } catch (Exception ignored) {
                         captureRequested = false;
                         processing = false;
-                        mainHandler.post(() -> {
-                            if (patchManager != null && liveEnabled) {
-                                patchManager.setVisible(true);
-                            }
-                        });
+
                     } finally {
                         if (image != null) {
                             image.close();
@@ -313,32 +316,166 @@ public class OverlayCaptureService extends Service {
         );
     }
 
-    private void beginCapture() {
+    private void requestFrame() {
         if (!liveEnabled || processing || captureRequested) {
             return;
         }
 
+        // When translations are visible, first grab a monitor frame without
+        // hiding anything. Only if the page actually moved do we clear the old
+        // text and request one clean OCR frame.
+        cleanCaptureRequested =
+                patchManager == null
+                        || !patchManager.hasPatches();
+
+        captureRequested = true;
+    }
+
+    private void handleMonitorFrame(
+            Bitmap bitmap,
+            int frameGeneration
+    ) {
+        if (!liveEnabled
+                || frameGeneration != generation) {
+            bitmap.recycle();
+            processing = false;
+            return;
+        }
+
+        int[] fingerprint =
+                makeFingerprint(bitmap);
+
+        bitmap.recycle();
+
+        if (lastMonitorFingerprint == null) {
+            lastMonitorFingerprint = fingerprint;
+            processing = false;
+            return;
+        }
+
+        float change =
+                fingerprintDifference(
+                        lastMonitorFingerprint,
+                        fingerprint
+                );
+
+        lastMonitorFingerprint = fingerprint;
+
+        if (change < 18.0f) {
+            processing = false;
+            return;
+        }
+
+        // The screen really moved. Drop stale coordinates once, then OCR the
+        // clean underlying screen. Static pages no longer blink every cycle.
+        generation++;
+        final int newGeneration = generation;
+
         mainHandler.post(() -> {
             if (patchManager != null) {
-                patchManager.setVisible(false);
+                patchManager.clear();
             }
         });
 
+        lastMonitorFingerprint = null;
+        cleanCaptureRequested = true;
+        processing = false;
+        captureRequested = false;
+
         captureHandler.postDelayed(
                 () -> {
-                    if (!liveEnabled || processing) {
-                        mainHandler.post(() -> {
-                            if (patchManager != null && liveEnabled) {
-                                patchManager.setVisible(true);
-                            }
-                        });
-                        return;
+                    if (liveEnabled
+                            && generation == newGeneration
+                            && !processing) {
+                        captureRequested = true;
                     }
-
-                    captureRequested = true;
                 },
-                PATCH_HIDE_MS
+                26L
         );
+    }
+
+    private int[] makeFingerprint(Bitmap bitmap) {
+        final int columns = 10;
+        final int rows = 14;
+        int[] out = new int[columns * rows];
+
+        int startY =
+                Math.max(
+                        0,
+                        bitmap.getHeight() / 10
+                );
+        int usableHeight =
+                Math.max(
+                        1,
+                        bitmap.getHeight()
+                                - startY
+                                - bitmap.getHeight() / 12
+                );
+
+        int index = 0;
+
+        for (int y = 0; y < rows; y++) {
+            int py =
+                    startY
+                            + (int) (
+                            (y + 0.5f)
+                                    * usableHeight
+                                    / rows
+                    );
+
+            py = Math.min(
+                    bitmap.getHeight() - 1,
+                    Math.max(0, py)
+            );
+
+            for (int x = 0; x < columns; x++) {
+                int px =
+                        (int) (
+                                (x + 0.5f)
+                                        * bitmap.getWidth()
+                                        / columns
+                        );
+
+                px = Math.min(
+                        bitmap.getWidth() - 1,
+                        Math.max(0, px)
+                );
+
+                int c =
+                        bitmap.getPixel(px, py);
+
+                out[index++] =
+                        (
+                                Color.red(c) * 299
+                                        + Color.green(c) * 587
+                                        + Color.blue(c) * 114
+                        ) / 1000;
+            }
+        }
+
+        return out;
+    }
+
+    private float fingerprintDifference(
+            int[] a,
+            int[] b
+    ) {
+        if (a == null
+                || b == null
+                || a.length != b.length
+                || a.length == 0) {
+            return 255f;
+        }
+
+        long total = 0L;
+
+        for (int i = 0; i < a.length; i++) {
+            total += Math.abs(
+                    a[i] - b[i]
+            );
+        }
+
+        return (float) total / a.length;
     }
 
     private Bitmap imageToBitmap(Image image) {
@@ -509,6 +646,8 @@ public class OverlayCaptureService extends Service {
             mainHandler.post(() -> {
                 if (patchManager != null && liveEnabled) {
                     patchManager.clear();
+                    lastMonitorFingerprint = null;
+                    cleanCaptureRequested = true;
                 }
             });
             return;
@@ -535,6 +674,8 @@ public class OverlayCaptureService extends Service {
                                         captureWidth,
                                         captureHeight
                                 );
+                                lastMonitorFingerprint = null;
+                                cleanCaptureRequested = false;
                             }
                         });
 
@@ -1045,6 +1186,8 @@ public class OverlayCaptureService extends Service {
         generation++;
         captureRequested = false;
         processing = false;
+        cleanCaptureRequested = true;
+        lastMonitorFingerprint = null;
         liveEnabled = enabled;
 
         if (captureHandler != null) {
@@ -1082,6 +1225,8 @@ public class OverlayCaptureService extends Service {
         generation++;
         captureRequested = false;
         processing = false;
+        cleanCaptureRequested = true;
+        lastMonitorFingerprint = null;
 
         if (captureHandler != null) {
             captureHandler.removeCallbacks(liveLoop);
