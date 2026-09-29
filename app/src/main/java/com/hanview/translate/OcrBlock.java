@@ -9,12 +9,15 @@ public class OcrBlock {
     public final Rect bounds;
     public String translated;
 
-    // Visual hints sampled from the real screen so translated text looks native
-    // instead of looking like a floating sticker.
     public int backgroundColor = Color.WHITE;
     public int textColor = Color.rgb(28, 28, 30);
     public float sourceTextSizePx = 0f;
     public boolean solidBackground = true;
+
+    // Preserve source layout information even after multiple vertical OCR columns
+    // are merged into one translation block.
+    public boolean verticalSource = false;
+    public float sourceGlyphWidthPx = 0f;
 
     public OcrBlock(int id, String original, Rect bounds) {
         this.id = id;
@@ -28,5 +31,7 @@ public class OcrBlock {
         textColor = other.textColor;
         sourceTextSizePx = other.sourceTextSizePx;
         solidBackground = other.solidBackground;
+        verticalSource = other.verticalSource;
+        sourceGlyphWidthPx = other.sourceGlyphWidthPx;
     }
 }
