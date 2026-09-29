@@ -24,6 +24,7 @@ public class TranslationOverlayView extends View {
 
     public TranslationOverlayView(Context context) {
         super(context);
+
         density =
                 getResources()
                         .getDisplayMetrics()
@@ -54,8 +55,8 @@ public class TranslationOverlayView extends View {
     protected synchronized void onDraw(Canvas canvas) {
         super.onDraw(canvas);
 
-        int screenWidth = getWidth();
-        int screenHeight = getHeight();
+        final int screenWidth = getWidth();
+        final int screenHeight = getHeight();
 
         for (OcrBlock block : blocks) {
             Rect src = block.bounds;
@@ -65,145 +66,109 @@ public class TranslationOverlayView extends View {
                             ? ""
                             : block.translated.trim();
 
-            if (value.isEmpty()
-                    || value.equals(
+            String original =
                     block.original == null
                             ? ""
-                            : block.original.trim()
-            )) {
+                            : block.original.trim();
+
+            if (value.isEmpty()
+                    || value.equals(original)) {
                 continue;
             }
 
-            // Keep the replacement tied to the original text bounds.
-            // The old implementation widened every label to fit Korean,
-            // which made translations drift over neighbouring cards while scrolling.
             boolean vertical =
                     src.height()
-                            > src.width() * 1.8f;
+                            > src.width() * 1.55f;
 
-            int horizontalPad = dp(2);
-            int verticalPad = dp(1);
+            int padX = dp(2);
+            int padY = dp(1);
 
-            int left =
+            int targetWidth;
+            int targetHeight;
+
+            if (vertical) {
+                // Convert vertical Japanese columns to horizontal Korean without
+                // turning every narrow column into a giant floating label.
+                targetWidth =
+                        Math.min(
+                                dp(132),
+                                Math.max(
+                                        dp(58),
+                                        Math.max(
+                                                Math.round(
+                                                        src.height() * 0.62f
+                                                ),
+                                                Math.round(
+                                                        src.width() * 2.8f
+                                                )
+                                        )
+                                )
+                        );
+
+                targetHeight =
+                        Math.min(
+                                screenHeight,
+                                Math.max(
+                                        src.height(),
+                                        dp(42)
+                                )
+                        );
+            } else {
+                targetWidth =
+                        Math.max(
+                                dp(24),
+                                src.width() + padX * 2
+                        );
+
+                targetHeight =
+                        Math.max(
+                                dp(20),
+                                src.height() + padY * 2
+                        );
+            }
+
+            targetWidth =
+                    Math.min(
+                            targetWidth,
+                            screenWidth
+                    );
+
+            int left;
+
+            if (vertical) {
+                left =
+                        src.centerX()
+                                - targetWidth / 2;
+            } else {
+                left =
+                        src.left - padX;
+            }
+
+            left =
                     clamp(
-                            src.left - horizontalPad,
+                            left,
                             0,
-                            Math.max(0, screenWidth - dp(18))
+                            Math.max(
+                                    0,
+                                    screenWidth - targetWidth
+                            )
                     );
 
             int top =
                     clamp(
-                            src.top - verticalPad,
+                            src.top - padY,
                             0,
-                            Math.max(0, screenHeight - dp(8))
-                    );
-
-            int targetWidth;
-
-            if (vertical) {
-                // Japanese manga/web text is often vertical. Render the Korean
-                // translation as a compact horizontal paragraph next to the same region.
-                targetWidth =
-                        Math.min(
-                                dp(150),
-                                Math.max(
-                                        dp(72),
-                                        src.height()
-                                )
-                        );
-
-                if (left + targetWidth > screenWidth) {
-                    left =
                             Math.max(
                                     0,
-                                    screenWidth - targetWidth
-                            );
-                }
-            } else {
-                targetWidth =
-                        Math.min(
-                                screenWidth - left,
-                                Math.max(
-                                        dp(24),
-                                        src.width()
-                                                + horizontalPad * 2
-                                )
-                        );
-            }
-
-            float sourceTextSize =
-                    block.sourceTextSizePx > 0
-                            ? block.sourceTextSizePx
-                            : Math.max(
-                            dp(10),
-                            src.height() * 0.65f
+                                    screenHeight - targetHeight
+                            )
                     );
 
-            textPaint.setTextSize(
-                    Math.max(
-                            sp(9),
-                            Math.min(
-                                    sp(17),
-                                    sourceTextSize
-                            )
-                    )
-            );
-            textPaint.setColor(
-                    block.textColor
-            );
-
-            int textWidth =
-                    Math.max(
-                            dp(18),
-                            targetWidth
+            targetHeight =
+                    Math.min(
+                            targetHeight,
+                            screenHeight - top
                     );
-
-            StaticLayout layout =
-                    StaticLayout.Builder
-                            .obtain(
-                                    value,
-                                    0,
-                                    value.length(),
-                                    textPaint,
-                                    textWidth
-                            )
-                            .setAlignment(
-                                    Layout.Alignment.ALIGN_NORMAL
-                            )
-                            .setIncludePad(false)
-                            .setLineSpacing(0f, 1.0f)
-                            .setMaxLines(
-                                    vertical ? 6 : 2
-                            )
-                            .setEllipsize(
-                                    TextUtils.TruncateAt.END
-                            )
-                            .build();
-
-            int targetHeight;
-
-            if (vertical) {
-                targetHeight =
-                        Math.min(
-                                screenHeight - top,
-                                Math.max(
-                                        src.height(),
-                                        layout.getHeight()
-                                                + dp(2)
-                                )
-                        );
-            } else {
-                targetHeight =
-                        Math.min(
-                                screenHeight - top,
-                                Math.max(
-                                        src.height()
-                                                + verticalPad * 2,
-                                        layout.getHeight()
-                                                + dp(2)
-                                )
-                        );
-            }
 
             int right =
                     Math.min(
@@ -215,6 +180,44 @@ public class TranslationOverlayView extends View {
                     Math.min(
                             screenHeight,
                             top + targetHeight
+                    );
+
+            if (right <= left || bottom <= top) {
+                continue;
+            }
+
+            int textWidth =
+                    Math.max(
+                            dp(18),
+                            right - left - dp(2)
+                    );
+
+            int textHeight =
+                    Math.max(
+                            dp(12),
+                            bottom - top - dp(2)
+                    );
+
+            float requestedSize =
+                    block.sourceTextSizePx > 0
+                            ? block.sourceTextSizePx
+                            : Math.max(
+                                    dp(10),
+                                    Math.min(
+                                            dp(19),
+                                            vertical
+                                                    ? src.width() * 0.95f
+                                                    : src.height() * 0.68f
+                                    )
+                            );
+
+            StaticLayout layout =
+                    buildFittedLayout(
+                            value,
+                            textWidth,
+                            textHeight,
+                            requestedSize,
+                            vertical ? 8 : 4
                     );
 
             backgroundPaint.setColor(
@@ -230,6 +233,7 @@ public class TranslationOverlayView extends View {
             );
 
             canvas.save();
+
             canvas.clipRect(
                     left,
                     top,
@@ -237,18 +241,81 @@ public class TranslationOverlayView extends View {
                     bottom
             );
 
-            canvas.translate(
-                    left,
-                    top + Math.max(
+            float dx =
+                    left
+                            + Math.max(
                             0f,
-                            (bottom - top
-                                    - layout.getHeight()) / 2f
-                    )
-            );
+                            ((right - left)
+                                    - layout.getWidth()) / 2f
+                    );
 
+            float dy =
+                    top
+                            + Math.max(
+                            0f,
+                            ((bottom - top)
+                                    - layout.getHeight()) / 2f
+                    );
+
+            canvas.translate(dx, dy);
             layout.draw(canvas);
             canvas.restore();
         }
+    }
+
+    private StaticLayout buildFittedLayout(
+            String value,
+            int width,
+            int height,
+            float requestedPx,
+            int maxLines
+    ) {
+        float minSize =
+                sp(8);
+
+        float maxSize =
+                Math.min(
+                        sp(18),
+                        Math.max(
+                                minSize,
+                                requestedPx
+                        )
+                );
+
+        float size = maxSize;
+        StaticLayout layout = null;
+
+        while (size >= minSize) {
+            textPaint.setTextSize(size);
+
+            layout =
+                    StaticLayout.Builder
+                            .obtain(
+                                    value,
+                                    0,
+                                    value.length(),
+                                    textPaint,
+                                    width
+                            )
+                            .setAlignment(
+                                    Layout.Alignment.ALIGN_CENTER
+                            )
+                            .setIncludePad(false)
+                            .setLineSpacing(0f, 1.0f)
+                            .setMaxLines(maxLines)
+                            .setEllipsize(
+                                    TextUtils.TruncateAt.END
+                            )
+                            .build();
+
+            if (layout.getHeight() <= height) {
+                break;
+            }
+
+            size -= sp(0.5f);
+        }
+
+        return layout;
     }
 
     private int clamp(
@@ -273,6 +340,10 @@ public class TranslationOverlayView extends View {
     }
 
     private float sp(int value) {
+        return sp((float) value);
+    }
+
+    private float sp(float value) {
         return value
                 * getResources()
                 .getDisplayMetrics()
