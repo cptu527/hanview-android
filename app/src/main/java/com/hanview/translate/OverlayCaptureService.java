@@ -60,9 +60,9 @@ public class OverlayCaptureService extends Service {
     private static final String CHANNEL_ID =
             "viewnyang_live_translation";
     private static final int NOTIFICATION_ID = 527;
-
     private static final long LIVE_INTERVAL_MS = 760L;
     private static final long OVERLAY_HIDE_BEFORE_CAPTURE_MS = 24L;
+
 
     private final Handler mainHandler =
             new Handler(Looper.getMainLooper());
@@ -75,9 +75,11 @@ public class OverlayCaptureService extends Service {
     private MediaProjection mediaProjection;
     private VirtualDisplay virtualDisplay;
     private ImageReader imageReader;
+
     private HandlerThread captureThread;
     private Handler captureHandler;
 
+    // 0 Latin, 1 Chinese, 2 Japanese, 3 Devanagari
     private final List<TextRecognizer> recognizers =
             new ArrayList<>();
 
@@ -118,8 +120,6 @@ public class OverlayCaptureService extends Service {
         windowManager =
                 (WindowManager) getSystemService(WINDOW_SERVICE);
 
-        // Multiple bundled recognizers let ViewNyang cover the common scripts
-        // seen in shopping, social, travel and community apps.
         recognizers.add(
                 TextRecognition.getClient(
                         TextRecognizerOptions.DEFAULT_OPTIONS
@@ -141,7 +141,8 @@ public class OverlayCaptureService extends Service {
                 )
         );
 
-        translationEngine = new TranslationEngine(this);
+        translationEngine =
+                new TranslationEngine(this);
 
         captureThread =
                 new HandlerThread("viewnyang-live-capture");
@@ -165,42 +166,47 @@ public class OverlayCaptureService extends Service {
             return START_NOT_STICKY;
         }
 
-        if (ACTION_START.equals(intent.getAction())) {
-            int resultCode =
-                    intent.getIntExtra(
-                            EXTRA_RESULT_CODE,
-                            0
-                    );
+        if (!ACTION_START.equals(intent.getAction())) {
+            return START_NOT_STICKY;
+        }
 
-            @SuppressWarnings("deprecation")
-            Intent resultData =
-                    intent.getParcelableExtra(
-                            EXTRA_RESULT_DATA
-                    );
-
-            if (resultCode == 0 || resultData == null) {
-                stopSelf();
-                return START_NOT_STICKY;
-            }
-
-            startAsForeground();
-
-            if (mediaProjection == null) {
-                startProjection(resultCode, resultData);
-
-                // Start live mode immediately. The floating button must never begin as OFF
-                // after the user already chose "실시간 번역 시작".
-                liveEnabled = true;
-                liveGeneration++;
-
-                showTranslationOverlay();
-                showBubble();
-
-                captureHandler.postDelayed(
-                        liveLoop,
-                        80L
+        int resultCode =
+                intent.getIntExtra(
+                        EXTRA_RESULT_CODE,
+                        0
                 );
-            }
+
+        @SuppressWarnings("deprecation")
+        Intent resultData =
+                intent.getParcelableExtra(
+                        EXTRA_RESULT_DATA
+                );
+
+        if (resultCode == 0 || resultData == null) {
+            stopSelf();
+            return START_NOT_STICKY;
+        }
+
+        startAsForeground();
+
+        if (mediaProjection == null) {
+            startProjection(
+                    resultCode,
+                    resultData
+            );
+
+            liveEnabled = true;
+            liveGeneration++;
+            latestFrameId++;
+
+            showTranslationOverlay();
+            showBubble();
+
+            captureHandler.removeCallbacks(liveLoop);
+            captureHandler.postDelayed(
+                    liveLoop,
+                    90L
+            );
         }
 
         return START_STICKY;
@@ -222,18 +228,21 @@ public class OverlayCaptureService extends Service {
                 );
 
         Notification.Builder builder =
-                Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                Build.VERSION.SDK_INT
+                        >= Build.VERSION_CODES.O
                         ? new Notification.Builder(
-                        this,
-                        CHANNEL_ID
-                )
+                                this,
+                                CHANNEL_ID
+                        )
                         : new Notification.Builder(this);
 
         Notification notification =
                 builder
-                        .setContentTitle("뷰냥 실시간 번역")
+                        .setContentTitle(
+                                "뷰냥 실시간 번역"
+                        )
                         .setContentText(
-                                "화면의 외국어를 한국어로 따라 번역 중"
+                                "화면의 외국어를 한국어로 바꾸는 중"
                         )
                         .setSmallIcon(
                                 android.R.drawable.ic_menu_view
@@ -260,22 +269,24 @@ public class OverlayCaptureService extends Service {
 
     private void createNotificationChannel() {
         if (Build.VERSION.SDK_INT
-                >= Build.VERSION_CODES.O) {
-            NotificationChannel channel =
-                    new NotificationChannel(
-                            CHANNEL_ID,
-                            "뷰냥 실시간 번역",
-                            NotificationManager.IMPORTANCE_LOW
-                    );
-
-            channel.setDescription(
-                    "실시간 화면 번역을 실행하는 동안 표시됩니다."
-            );
-
-            getSystemService(
-                    NotificationManager.class
-            ).createNotificationChannel(channel);
+                < Build.VERSION_CODES.O) {
+            return;
         }
+
+        NotificationChannel channel =
+                new NotificationChannel(
+                        CHANNEL_ID,
+                        "뷰냥 실시간 번역",
+                        NotificationManager.IMPORTANCE_LOW
+                );
+
+        channel.setDescription(
+                "실시간 화면 번역을 실행하는 동안 표시됩니다."
+        );
+
+        getSystemService(
+                NotificationManager.class
+        ).createNotificationChannel(channel);
     }
 
     @SuppressWarnings("deprecation")
@@ -331,7 +342,8 @@ public class OverlayCaptureService extends Service {
                     Image image = null;
 
                     try {
-                        image = reader.acquireLatestImage();
+                        image =
+                                reader.acquireLatestImage();
 
                         if (image == null
                                 || !captureRequested
@@ -351,10 +363,6 @@ public class OverlayCaptureService extends Service {
                         Bitmap bitmap =
                                 imageToBitmap(image);
 
-                        // Restore the previous translated frame immediately after the
-                        // clean screenshot is captured. Keeping the old frame visible
-                        // until the new OCR/translation is ready removes the flashing
-                        // caused by clearing every ~400 ms.
                         mainHandler.post(() -> {
                             if (translationOverlay != null
                                     && liveEnabled) {
@@ -372,16 +380,6 @@ public class OverlayCaptureService extends Service {
                     } catch (Exception ignored) {
                         captureRequested = false;
                         processing = false;
-
-                        mainHandler.post(() -> {
-                            if (translationOverlay != null
-                                    && liveEnabled) {
-                                translationOverlay
-                                        .setVisibility(
-                                                View.VISIBLE
-                                        );
-                            }
-                        });
                     } finally {
                         if (image != null) {
                             image.close();
@@ -405,7 +403,9 @@ public class OverlayCaptureService extends Service {
                 );
     }
 
-    private Bitmap imageToBitmap(Image image) {
+    private Bitmap imageToBitmap(
+            Image image
+    ) {
         Image.Plane plane =
                 image.getPlanes()[0];
 
@@ -462,12 +462,13 @@ public class OverlayCaptureService extends Service {
                         0
                 );
 
-        // Chinese, Japanese and Latin run together. This fixes pages where a
-        // Chinese recognizer incorrectly steals Japanese kanji or ignores kana.
-        int[] primaryIndexes = new int[]{0, 1, 2};
+        int[] primaryIndexes =
+                new int[]{0, 1, 2};
 
         AtomicInteger remaining =
-                new AtomicInteger(primaryIndexes.length);
+                new AtomicInteger(
+                        primaryIndexes.length
+                );
 
         List<OcrBlock> candidates =
                 Collections.synchronizedList(
@@ -493,24 +494,28 @@ public class OverlayCaptureService extends Service {
                         }
                     })
                     .addOnCompleteListener(task -> {
-                        if (remaining.decrementAndGet() == 0) {
-                            if (!candidates.isEmpty()) {
-                                finishRecognition(
-                                        candidates,
-                                        generation,
-                                        frameId,
-                                        bitmap
-                                );
-                                bitmap.recycle();
-                            } else {
-                                runDevanagariFallback(
-                                        input,
-                                        bitmap,
-                                        generation,
-                                        frameId
-                                );
-                            }
+                        if (remaining.decrementAndGet() != 0) {
+                            return;
                         }
+
+                        if (!candidates.isEmpty()) {
+                            finishRecognition(
+                                    candidates,
+                                    generation,
+                                    frameId,
+                                    bitmap
+                            );
+                        } else {
+                            runDevanagariFallback(
+                                    input,
+                                    bitmap,
+                                    generation,
+                                    frameId
+                            );
+                            return;
+                        }
+
+                        bitmap.recycle();
                     });
         }
     }
@@ -533,9 +538,11 @@ public class OverlayCaptureService extends Service {
                                 bitmap
                         )
                 )
-                .addOnCompleteListener(task ->
-                        bitmap.recycle()
-                );
+                .addOnCompleteListener(task -> {
+                    if (!bitmap.isRecycled()) {
+                        bitmap.recycle();
+                    }
+                });
     }
 
     private void finishRecognition(
@@ -544,8 +551,10 @@ public class OverlayCaptureService extends Service {
             long frameId,
             Bitmap screenshot
     ) {
-        if (!isCurrentGeneration(generation)
-                || frameId != latestFrameId) {
+        if (!isCurrent(
+                generation,
+                frameId
+        )) {
             processing = false;
             return;
         }
@@ -578,8 +587,6 @@ public class OverlayCaptureService extends Service {
                                 b.bounds.height()
                         );
 
-                // Japanese vertical columns on the same row are read from
-                // right to left. Keep that order for contextual/AI translation.
                 if (overlap > minHeight / 2) {
                     return Integer.compare(
                             b.bounds.left,
@@ -604,46 +611,50 @@ public class OverlayCaptureService extends Service {
             );
         });
 
-        // Re-number after merging recognizers.
         List<OcrBlock> normalized =
                 new ArrayList<>();
 
-        for (int i = 0; i < blocks.size(); i++) {
-            OcrBlock old = blocks.get(i);
+        for (OcrBlock old : blocks) {
+            if (old.original == null
+                    || old.original.trim().isEmpty()) {
+                continue;
+            }
 
-            OcrBlock normalizedBlock =
+            OcrBlock block =
                     new OcrBlock(
-                            i,
+                            normalized.size(),
                             old.original,
                             old.bounds
                     );
 
-            normalizedBlock.copyVisualStyleFrom(old);
-            normalized.add(normalizedBlock);
-        }
-
-        for (OcrBlock block : normalized) {
             sampleVisualStyle(
                     screenshot,
                     block
             );
-        }
 
-        normalized.removeIf(block ->
-                block.original == null
-                        || block.original.trim().length() < 2
-        );
+            normalized.add(block);
+
+            if (normalized.size() >= 70) {
+                break;
+            }
+        }
 
         if (normalized.isEmpty()) {
             processing = false;
-
-            mainHandler.post(() -> {
-                if (translationOverlay != null
-                        && isCurrentGeneration(generation)) {
-                    translationOverlay.clearBlocks();
-                }
-            });
-
+            if (isCurrent(
+                    generation,
+                    frameId
+            )) {
+                mainHandler.post(() -> {
+                    if (translationOverlay != null
+                            && isCurrent(
+                            generation,
+                            frameId
+                    )) {
+                        translationOverlay.clearBlocks();
+                    }
+                });
+            }
             return;
         }
 
@@ -657,33 +668,44 @@ public class OverlayCaptureService extends Service {
                     ) {
                         processing = false;
 
-                        if (!isCurrentGeneration(
-                                generation
-                        )
-                                || frameId != latestFrameId) {
+                        if (!isCurrent(
+                                generation,
+                                frameId
+                        )) {
                             return;
                         }
 
                         mainHandler.post(() -> {
                             if (translationOverlay != null
-                                    && isCurrentGeneration(
-                                    generation
-                            )
-                                    && frameId == latestFrameId) {
-                                translationOverlay
-                                        .setBlocks(
-                                                translated
-                                        );
+                                    && isCurrent(
+                                    generation,
+                                    frameId
+                            )) {
+                                translationOverlay.setBlocks(
+                                        translated
+                                );
                             }
                         });
                     }
 
                     @Override
-                    public void onError(String message) {
+                    public void onError(
+                            String message
+                    ) {
                         processing = false;
+                        // Keep live mode quiet. The next frame retries.
                     }
                 }
         );
+    }
+
+    private boolean isCurrent(
+            int generation,
+            long frameId
+    ) {
+        return liveEnabled
+                && generation == liveGeneration
+                && frameId == latestFrameId;
     }
 
     private List<OcrBlock> extractForeignLines(
@@ -713,8 +735,8 @@ public class OverlayCaptureService extends Service {
                     continue;
                 }
 
-                if (rect.width() < dp(14)
-                        || rect.height() < dp(9)) {
+                if (rect.width() < dp(8)
+                        || rect.height() < dp(8)) {
                     continue;
                 }
 
@@ -726,7 +748,7 @@ public class OverlayCaptureService extends Service {
                         )
                 );
 
-                if (out.size() >= 70) {
+                if (out.size() >= 80) {
                     return out;
                 }
             }
@@ -741,11 +763,8 @@ public class OverlayCaptureService extends Service {
         for (int i = 0; i < value.length(); i++) {
             char c = value.charAt(i);
 
-            if (!Character.isLetter(c)) {
-                continue;
-            }
-
-            if (!isHangul(c)) {
+            if (Character.isLetter(c)
+                    && !isHangul(c)) {
                 return true;
             }
         }
@@ -762,12 +781,14 @@ public class OverlayCaptureService extends Service {
         for (int i = 0; i < value.length(); i++) {
             char c = value.charAt(i);
 
-            if (Character.isLetter(c)) {
-                letters++;
+            if (!Character.isLetter(c)) {
+                continue;
+            }
 
-                if (isHangul(c)) {
-                    hangul++;
-                }
+            letters++;
+
+            if (isHangul(c)) {
+                hangul++;
             }
         }
 
@@ -792,13 +813,16 @@ public class OverlayCaptureService extends Service {
             if (intersectionOverUnion(
                     existing.bounds,
                     candidate.bounds
-            ) < 0.58f) {
+            ) < 0.56f) {
                 continue;
             }
 
             if (candidateScore(candidate.original)
                     > candidateScore(existing.original)) {
-                blocks.set(i, candidate);
+                blocks.set(
+                        i,
+                        candidate
+                );
             }
 
             return;
@@ -813,17 +837,15 @@ public class OverlayCaptureService extends Service {
     ) {
         int left =
                 Math.max(a.left, b.left);
-
         int top =
                 Math.max(a.top, b.top);
-
         int right =
                 Math.min(a.right, b.right);
-
         int bottom =
                 Math.min(a.bottom, b.bottom);
 
-        if (right <= left || bottom <= top) {
+        if (right <= left
+                || bottom <= top) {
             return 0f;
         }
 
@@ -832,31 +854,41 @@ public class OverlayCaptureService extends Service {
                         * (bottom - top);
 
         long union =
-                (long) a.width() * a.height()
-                        + (long) b.width() * b.height()
+                (long) a.width()
+                        * a.height()
+                        + (long) b.width()
+                        * b.height()
                         - intersection;
 
-        if (union <= 0) {
-            return 0f;
-        }
-
-        return (float) intersection
-                / (float) union;
+        return union <= 0
+                ? 0f
+                : (float) intersection
+                        / (float) union;
     }
 
-    private int candidateScore(String value) {
-        int score = value.length();
+    private int candidateScore(
+            String value
+    ) {
+        int score =
+                value == null
+                        ? 0
+                        : value.length();
+
+        if (value == null) {
+            return score;
+        }
 
         for (int i = 0; i < value.length(); i++) {
             char c = value.charAt(i);
 
-            if (c >= '\u3040' && c <= '\u30FF') {
-                score += 12;
-            } else if ((c >= '\u3400' && c <= '\u4DBF')
-                    || (c >= '\u4E00' && c <= '\u9FFF')) {
+            if (c >= '\u3040'
+                    && c <= '\u30FF') {
+                score += 16;
+            } else if ((c >= '\u3400'
+                    && c <= '\u4DBF')
+                    || (c >= '\u4E00'
+                    && c <= '\u9FFF')) {
                 score += 6;
-            } else if (c >= '\u0900' && c <= '\u097F') {
-                score += 8;
             }
         }
 
@@ -869,40 +901,87 @@ public class OverlayCaptureService extends Service {
     ) {
         Rect r = block.bounds;
 
-        int margin = Math.max(dp(3), Math.round(r.height() * 0.25f));
-        int left = Math.max(0, r.left - margin);
-        int top = Math.max(0, r.top - margin);
-        int right = Math.min(screenshot.getWidth() - 1, r.right + margin);
-        int bottom = Math.min(screenshot.getHeight() - 1, r.bottom + margin);
+        int margin =
+                Math.max(
+                        dp(3),
+                        Math.round(
+                                Math.min(
+                                        r.width(),
+                                        r.height()
+                                ) * 0.22f
+                        )
+                );
+
+        int left =
+                Math.max(
+                        0,
+                        r.left - margin
+                );
+        int top =
+                Math.max(
+                        0,
+                        r.top - margin
+                );
+        int right =
+                Math.min(
+                        screenshot.getWidth() - 1,
+                        r.right + margin
+                );
+        int bottom =
+                Math.min(
+                        screenshot.getHeight() - 1,
+                        r.bottom + margin
+                );
 
         java.util.HashMap<Integer, Integer> bins =
                 new java.util.HashMap<>();
 
-        int samples = 0;
-        int minLum = 255;
-        int maxLum = 0;
+        int stepX =
+                Math.max(
+                        1,
+                        (right - left) / 12
+                );
 
-        int stepX = Math.max(1, (right - left) / 10);
-        int stepY = Math.max(1, (bottom - top) / 6);
+        int stepY =
+                Math.max(
+                        1,
+                        (bottom - top) / 8
+                );
 
-        for (int x = left; x <= right; x += stepX) {
-            samples += addColorSample(
-                    screenshot.getPixel(x, top),
+        for (int x = left;
+             x <= right;
+             x += stepX) {
+            addColorSample(
+                    screenshot.getPixel(
+                            x,
+                            top
+                    ),
                     bins
             );
-            samples += addColorSample(
-                    screenshot.getPixel(x, bottom),
+            addColorSample(
+                    screenshot.getPixel(
+                            x,
+                            bottom
+                    ),
                     bins
             );
         }
 
-        for (int y = top; y <= bottom; y += stepY) {
-            samples += addColorSample(
-                    screenshot.getPixel(left, y),
+        for (int y = top;
+             y <= bottom;
+             y += stepY) {
+            addColorSample(
+                    screenshot.getPixel(
+                            left,
+                            y
+                    ),
                     bins
             );
-            samples += addColorSample(
-                    screenshot.getPixel(right, y),
+            addColorSample(
+                    screenshot.getPixel(
+                            right,
+                            y
+                    ),
                     bins
             );
         }
@@ -910,78 +989,120 @@ public class OverlayCaptureService extends Service {
         int bestKey = 0;
         int bestCount = -1;
 
-        for (java.util.Map.Entry<Integer, Integer> entry : bins.entrySet()) {
-            if (entry.getValue() > bestCount) {
-                bestKey = entry.getKey();
-                bestCount = entry.getValue();
+        for (java.util.Map.Entry<Integer, Integer> entry :
+                bins.entrySet()) {
+            if (entry.getValue()
+                    > bestCount) {
+                bestCount =
+                        entry.getValue();
+                bestKey =
+                        entry.getKey();
             }
         }
 
-        int red = ((bestKey >> 10) & 31) * 255 / 31;
-        int green = ((bestKey >> 5) & 31) * 255 / 31;
-        int blue = (bestKey & 31) * 255 / 31;
+        int red =
+                ((bestKey >> 10) & 31)
+                        * 255 / 31;
+        int green =
+                ((bestKey >> 5) & 31)
+                        * 255 / 31;
+        int blue =
+                (bestKey & 31)
+                        * 255 / 31;
 
-        block.backgroundColor =
-                Color.rgb(red, green, blue);
+        int max =
+                Math.max(
+                        red,
+                        Math.max(
+                                green,
+                                blue
+                        )
+                );
+        int min =
+                Math.min(
+                        red,
+                        Math.min(
+                                green,
+                                blue
+                        )
+                );
 
-        // Measure variation using samples around the ring. Product photos have
-        // large variance; normal white/gray/black UI backgrounds do not.
-        for (int x = left; x <= right; x += stepX) {
-            int[] pair = new int[]{
-                    screenshot.getPixel(x, top),
-                    screenshot.getPixel(x, bottom)
-            };
-
-            for (int c : pair) {
-                int lum =
-                        (Color.red(c) * 299
-                                + Color.green(c) * 587
-                                + Color.blue(c) * 114) / 1000;
-                minLum = Math.min(minLum, lum);
-                maxLum = Math.max(maxLum, lum);
-            }
-        }
-
-        int backgroundLum =
+        int luminance =
                 (red * 299
                         + green * 587
                         + blue * 114) / 1000;
 
-        block.solidBackground =
-                bestCount >= Math.max(3, samples / 5)
-                        && (maxLum - minLum) < 72;
+        // Snap neutral UI backgrounds to clean white/black/gray so the result
+        // looks like browser translation rather than a tinted sticker.
+        if (luminance >= 225
+                && max - min <= 36) {
+            red = 255;
+            green = 255;
+            blue = 255;
+            luminance = 255;
+        } else if (luminance <= 28) {
+            red = 0;
+            green = 0;
+            blue = 0;
+            luminance = 0;
+        }
+
+        block.backgroundColor =
+                Color.rgb(
+                        red,
+                        green,
+                        blue
+                );
 
         block.textColor =
-                backgroundLum >= 145
-                        ? Color.rgb(26, 26, 28)
+                luminance >= 145
+                        ? Color.rgb(
+                                25,
+                                25,
+                                28
+                        )
                         : Color.WHITE;
 
         block.sourceTextSizePx =
                 Math.max(
                         dp(10),
                         Math.min(
-                                dp(19),
+                                dp(20),
                                 r.height() * 0.70f
                         )
                 );
+
+        block.solidBackground = true;
     }
 
-    private int addColorSample(
+    private void addColorSample(
             int color,
             java.util.HashMap<Integer, Integer> bins
     ) {
-        int r5 = Color.red(color) * 31 / 255;
-        int g5 = Color.green(color) * 31 / 255;
-        int b5 = Color.blue(color) * 31 / 255;
-        int key = (r5 << 10) | (g5 << 5) | b5;
+        int r5 =
+                Color.red(color)
+                        * 31 / 255;
+        int g5 =
+                Color.green(color)
+                        * 31 / 255;
+        int b5 =
+                Color.blue(color)
+                        * 31 / 255;
 
-        Integer current = bins.get(key);
+        int key =
+                (r5 << 10)
+                        | (g5 << 5)
+                        | b5;
+
+        Integer current =
+                bins.get(key);
+
         bins.put(
                 key,
-                current == null ? 1 : current + 1
+                current == null
+                        ? 1
+                        : current + 1
         );
-
-        return 1;
     }
 
     private void showBubble() {
@@ -990,11 +1111,16 @@ public class OverlayCaptureService extends Service {
         }
 
         bubble = new TextView(this);
-        bubble.setTextColor(Color.WHITE);
+        bubble.setTextColor(
+                Color.WHITE
+        );
         bubble.setTextSize(12);
-        bubble.setGravity(Gravity.CENTER);
+        bubble.setGravity(
+                Gravity.CENTER
+        );
         bubble.setTypeface(
-                android.graphics.Typeface.DEFAULT_BOLD
+                android.graphics.Typeface
+                        .DEFAULT_BOLD
         );
         bubble.setContentDescription(
                 "실시간 번역 켜기 또는 끄기"
@@ -1005,12 +1131,10 @@ public class OverlayCaptureService extends Service {
         int type =
                 Build.VERSION.SDK_INT
                         >= Build.VERSION_CODES.O
-                        ? WindowManager
-                        .LayoutParams
-                        .TYPE_APPLICATION_OVERLAY
-                        : WindowManager
-                        .LayoutParams
-                        .TYPE_PHONE;
+                        ? WindowManager.LayoutParams
+                                .TYPE_APPLICATION_OVERLAY
+                        : WindowManager.LayoutParams
+                                .TYPE_PHONE;
 
         bubbleParams =
                 new WindowManager.LayoutParams(
@@ -1025,25 +1149,25 @@ public class OverlayCaptureService extends Service {
                 );
 
         bubbleParams.gravity =
-                Gravity.TOP | Gravity.START;
+                Gravity.TOP
+                        | Gravity.START;
 
         bubbleParams.x =
                 Math.max(
                         dp(8),
-                        captureWidth - dp(62)
+                        captureWidth
+                                - dp(62)
                 );
 
-        bubbleParams.y = dp(270);
+        bubbleParams.y =
+                dp(270);
 
         final float[] downX =
                 new float[1];
-
         final float[] downY =
                 new float[1];
-
         final int[] startX =
                 new int[1];
-
         final int[] startY =
                 new int[1];
 
@@ -1089,13 +1213,14 @@ public class OverlayCaptureService extends Service {
                             float dx =
                                     event.getRawX()
                                             - downX[0];
-
                             float dy =
                                     event.getRawY()
                                             - downY[0];
 
-                            if (Math.hypot(dx, dy)
-                                    < dp(10)) {
+                            if (Math.hypot(
+                                    dx,
+                                    dy
+                            ) < dp(10)) {
                                 setLiveEnabled(
                                         !liveEnabled
                                 );
@@ -1115,13 +1240,17 @@ public class OverlayCaptureService extends Service {
         );
     }
 
-    private void styleBubble(boolean enabled) {
+    private void styleBubble(
+            boolean enabled
+    ) {
         if (bubble == null) {
             return;
         }
 
         bubble.setText(
-                enabled ? "한" : "OFF"
+                enabled
+                        ? "한"
+                        : "OFF"
         );
 
         GradientDrawable background =
@@ -1133,8 +1262,16 @@ public class OverlayCaptureService extends Service {
 
         background.setColor(
                 enabled
-                        ? Color.rgb(34, 111, 91)
-                        : Color.rgb(55, 60, 70)
+                        ? Color.rgb(
+                                34,
+                                111,
+                                91
+                        )
+                        : Color.rgb(
+                                55,
+                                60,
+                                70
+                        )
         );
 
         background.setStroke(
@@ -1147,7 +1284,46 @@ public class OverlayCaptureService extends Service {
                 )
         );
 
-        bubble.setBackground(background);
+        bubble.setBackground(
+                background
+        );
+    }
+
+    private void setLiveEnabled(
+            boolean enabled
+    ) {
+        if (captureHandler == null) {
+            return;
+        }
+
+        liveGeneration++;
+        latestFrameId++;
+        captureRequested = false;
+        processing = false;
+        liveEnabled = enabled;
+
+        captureHandler.removeCallbacks(
+                liveLoop
+        );
+        mainHandler.post(() -> {
+            styleBubble(enabled);
+
+            if (translationOverlay != null) {
+                translationOverlay.setVisibility(
+                        View.VISIBLE
+                );
+
+                if (!enabled) {
+                    translationOverlay.clearBlocks();
+                }
+            }
+        });
+
+        if (enabled) {
+            captureHandler.post(
+                    liveLoop
+            );
+        }
     }
 
     private void showTranslationOverlay() {
@@ -1161,12 +1337,10 @@ public class OverlayCaptureService extends Service {
         int type =
                 Build.VERSION.SDK_INT
                         >= Build.VERSION_CODES.O
-                        ? WindowManager
-                        .LayoutParams
-                        .TYPE_APPLICATION_OVERLAY
-                        : WindowManager
-                        .LayoutParams
-                        .TYPE_PHONE;
+                        ? WindowManager.LayoutParams
+                                .TYPE_APPLICATION_OVERLAY
+                        : WindowManager.LayoutParams
+                                .TYPE_PHONE;
 
         WindowManager.LayoutParams params =
                 new WindowManager.LayoutParams(
@@ -1188,9 +1362,8 @@ public class OverlayCaptureService extends Service {
 
         if (Build.VERSION.SDK_INT
                 >= Build.VERSION_CODES.S) {
-            // Android 12+ limits touch-through for application overlays.
-            // 0.79 stays under that threshold while making the replacement
-            // noticeably less translucent than the old 0.78 layer.
+            // Stay below Android's touch-obscuring threshold while keeping the
+            // replacement layer as solid-looking as an application overlay can be.
             params.alpha = 0.79f;
         }
 
@@ -1201,42 +1374,6 @@ public class OverlayCaptureService extends Service {
                 translationOverlay,
                 params
         );
-    }
-
-    private void setLiveEnabled(
-            boolean enabled
-    ) {
-        if (captureHandler == null) {
-            return;
-        }
-
-        liveGeneration++;
-        latestFrameId++;
-        captureRequested = false;
-        liveEnabled = enabled;
-
-        captureHandler.removeCallbacks(
-                liveLoop
-        );
-
-        mainHandler.post(() -> {
-            styleBubble(enabled);
-
-            if (translationOverlay != null) {
-                translationOverlay.setVisibility(
-                        View.VISIBLE
-                );
-
-                if (!enabled) {
-                    translationOverlay
-                            .clearBlocks();
-                }
-            }
-        });
-
-        if (enabled) {
-            captureHandler.post(liveLoop);
-        }
     }
 
     private void prepareLiveCapture() {
@@ -1260,16 +1397,13 @@ public class OverlayCaptureService extends Service {
                     if (!liveEnabled
                             || processing) {
                         mainHandler.post(() -> {
-                            if (translationOverlay
-                                    != null
+                            if (translationOverlay != null
                                     && liveEnabled) {
-                                translationOverlay
-                                        .setVisibility(
-                                                View.VISIBLE
-                                        );
+                                translationOverlay.setVisibility(
+                                        View.VISIBLE
+                                );
                             }
                         });
-
                         return;
                     }
 
@@ -1279,15 +1413,9 @@ public class OverlayCaptureService extends Service {
         );
     }
 
-    private boolean isCurrentGeneration(
-            int generation
+    private int dp(
+            int value
     ) {
-        return liveEnabled
-                && generation
-                == liveGeneration;
-    }
-
-    private int dp(int value) {
         return Math.round(
                 value
                         * getResources()
@@ -1300,6 +1428,7 @@ public class OverlayCaptureService extends Service {
     public void onDestroy() {
         liveEnabled = false;
         liveGeneration++;
+        latestFrameId++;
         captureRequested = false;
         processing = false;
 
@@ -1316,7 +1445,6 @@ public class OverlayCaptureService extends Service {
                 );
             } catch (Exception ignored) {
             }
-
             bubble = null;
         }
 
@@ -1346,10 +1474,10 @@ public class OverlayCaptureService extends Service {
             mediaProjection = null;
         }
 
-        for (TextRecognizer recognizer : recognizers) {
+        for (TextRecognizer recognizer :
+                recognizers) {
             recognizer.close();
         }
-
         recognizers.clear();
 
         if (translationEngine != null) {
@@ -1366,7 +1494,9 @@ public class OverlayCaptureService extends Service {
     }
 
     @Override
-    public IBinder onBind(Intent intent) {
+    public IBinder onBind(
+            Intent intent
+    ) {
         return null;
     }
 }
