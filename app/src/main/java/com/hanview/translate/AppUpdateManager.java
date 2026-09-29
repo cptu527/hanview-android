@@ -27,7 +27,19 @@ public class AppUpdateManager {
     private static final String LATEST_JSON =
             "https://github.com/cptu527/hanview-android/releases/download/latest/latest.json";
 
+    private static final String PREFS = "viewnyang_update";
+    private static final String KEY_PENDING_DOWNLOAD_ID = "pending_download_id";
+    private static final String KEY_PENDING_APK_URL = "pending_apk_url";
+
+    public interface Listener {
+        void onChecking();
+        void onUpdateAvailable(String versionName);
+        void onUpToDate();
+        void onError();
+    }
+
     private final Activity activity;
+    private final Listener listener;
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final DownloadManager downloadManager;
 
@@ -50,13 +62,16 @@ public class AppUpdateManager {
         }
     };
 
-    public AppUpdateManager(Activity activity) {
+    public AppUpdateManager(Activity activity, Listener listener) {
         this.activity = activity;
+        this.listener = listener;
         this.downloadManager =
                 (DownloadManager) activity.getSystemService(Context.DOWNLOAD_SERVICE);
     }
 
     public void checkForUpdate(boolean manual) {
+        activity.runOnUiThread(listener::onChecking);
+
         executor.execute(() -> {
             try {
                 URL url = new URL(LATEST_JSON + "?t=" + System.currentTimeMillis());
@@ -64,6 +79,7 @@ public class AppUpdateManager {
                 conn.setConnectTimeout(8000);
                 conn.setReadTimeout(8000);
                 conn.setRequestProperty("Accept", "application/json");
+                conn.setInstanceFollowRedirects(true);
                 conn.setUseCaches(false);
 
                 int code = conn.getResponseCode();
@@ -91,32 +107,37 @@ public class AppUpdateManager {
 
                 activity.runOnUiThread(() -> {
                     if (versionCode > BuildConfig.VERSION_CODE) {
-                        showUpdateDialog(versionName, apkUrl, notes);
-                    } else if (manual) {
-                        Toast.makeText(
-                                activity,
-                                "이미 최신 버전이에요.",
-                                Toast.LENGTH_SHORT
-                        ).show();
+                        listener.onUpdateAvailable(versionName);
+                        if (manual) {
+                            showUpdateDialog(versionName, apkUrl, notes);
+                        }
+                    } else {
+                        listener.onUpToDate();
+                        if (manual) {
+                            Toast.makeText(
+                                    activity,
+                                    "이미 최신 버전이에요.",
+                                    Toast.LENGTH_SHORT
+                            ).show();
+                        }
                     }
                 });
             } catch (Exception e) {
-                if (manual) {
-                    activity.runOnUiThread(() -> Toast.makeText(
-                            activity,
-                            "업데이트 정보를 확인하지 못했어요.",
-                            Toast.LENGTH_LONG
-                    ).show());
-                }
+                activity.runOnUiThread(() -> {
+                    listener.onError();
+                    if (manual) {
+                        Toast.makeText(
+                                activity,
+                                "업데이트 정보를 확인하지 못했어요.",
+                                Toast.LENGTH_LONG
+                        ).show();
+                    }
+                });
             }
         });
     }
 
-    private void showUpdateDialog(
-            String versionName,
-            String apkUrl,
-            String notes
-    ) {
+    public void showUpdateDialog(String versionName, String apkUrl, String notes) {
         String message = "새 버전 " + versionName + "이 있어요.";
         if (notes != null && !notes.trim().isEmpty()) {
             message += "\n\n" + notes.trim();
@@ -126,27 +147,56 @@ public class AppUpdateManager {
                 .setTitle("뷰냥 업데이트")
                 .setMessage(message)
                 .setNegativeButton("나중에", null)
-                .setPositiveButton("업데이트", (dialog, which) -> {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
-                            && !activity.getPackageManager()
-                            .canRequestPackageInstalls()) {
-                        Intent settings = new Intent(
-                                Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-                                Uri.parse("package:" + activity.getPackageName())
-                        );
-                        activity.startActivity(settings);
-
-                        Toast.makeText(
-                                activity,
-                                "‘이 출처 허용’을 켠 뒤 업데이트 확인을 다시 눌러주세요.",
-                                Toast.LENGTH_LONG
-                        ).show();
-                        return;
-                    }
-
-                    download(apkUrl);
-                })
+                .setPositiveButton("업데이트", (dialog, which) ->
+                        beginUpdate(apkUrl)
+                )
                 .show();
+    }
+
+    private void beginUpdate(String apkUrl) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                && !activity.getPackageManager().canRequestPackageInstalls()) {
+            activity.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                    .edit()
+                    .putString(KEY_PENDING_APK_URL, apkUrl)
+                    .apply();
+
+            Intent settings = new Intent(
+                    Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                    Uri.parse("package:" + activity.getPackageName())
+            );
+            activity.startActivity(settings);
+
+            Toast.makeText(
+                    activity,
+                    "‘이 출처 허용’을 켜면 돌아왔을 때 업데이트를 계속 진행해요.",
+                    Toast.LENGTH_LONG
+            ).show();
+            return;
+        }
+
+        download(apkUrl);
+    }
+
+    public void resumePendingUpdateFlow() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                && !activity.getPackageManager().canRequestPackageInstalls()) {
+            return;
+        }
+
+        String pendingUrl = activity.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .getString(KEY_PENDING_APK_URL, "");
+
+        if (pendingUrl != null && !pendingUrl.trim().isEmpty()) {
+            activity.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                    .edit()
+                    .remove(KEY_PENDING_APK_URL)
+                    .apply();
+            download(pendingUrl);
+            return;
+        }
+
+        tryInstallPendingDownload();
     }
 
     private void download(String apkUrl) {
@@ -162,6 +212,8 @@ public class AppUpdateManager {
                     DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED
             );
             request.setMimeType("application/vnd.android.package-archive");
+            request.setAllowedOverMetered(true);
+            request.setAllowedOverRoaming(true);
             request.setDestinationInExternalFilesDir(
                     activity,
                     Environment.DIRECTORY_DOWNLOADS,
@@ -170,15 +222,15 @@ public class AppUpdateManager {
 
             pendingDownloadId = downloadManager.enqueue(request);
 
-            activity.getSharedPreferences(
-                    "viewnyang_update",
-                    Context.MODE_PRIVATE
-            ).edit().putLong("pending_download_id", pendingDownloadId).apply();
+            activity.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                    .edit()
+                    .putLong(KEY_PENDING_DOWNLOAD_ID, pendingDownloadId)
+                    .apply();
 
             Toast.makeText(
                     activity,
-                    "업데이트를 내려받고 있어요.",
-                    Toast.LENGTH_SHORT
+                    "업데이트를 내려받고 있어요. 완료되면 설치 화면이 자동으로 열려요.",
+                    Toast.LENGTH_LONG
             ).show();
         } catch (Exception e) {
             Toast.makeText(
@@ -190,15 +242,10 @@ public class AppUpdateManager {
     }
 
     public void tryInstallPendingDownload() {
-        long saved = activity.getSharedPreferences(
-                "viewnyang_update",
-                Context.MODE_PRIVATE
-        ).getLong("pending_download_id", -1L);
+        long saved = activity.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .getLong(KEY_PENDING_DOWNLOAD_ID, -1L);
 
-        if (saved <= 0) return;
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
-                && !activity.getPackageManager().canRequestPackageInstalls()) {
+        if (saved <= 0) {
             return;
         }
 
@@ -211,7 +258,9 @@ public class AppUpdateManager {
 
     private void openInstaller(long downloadId) {
         Uri uri = downloadManager.getUriForDownloadedFile(downloadId);
-        if (uri == null) return;
+        if (uri == null) {
+            return;
+        }
 
         Intent install = new Intent(Intent.ACTION_VIEW);
         install.setDataAndType(
@@ -223,14 +272,16 @@ public class AppUpdateManager {
 
         activity.startActivity(install);
 
-        activity.getSharedPreferences(
-                "viewnyang_update",
-                Context.MODE_PRIVATE
-        ).edit().remove("pending_download_id").apply();
+        activity.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .edit()
+                .remove(KEY_PENDING_DOWNLOAD_ID)
+                .apply();
     }
 
     private void registerReceiverIfNeeded() {
-        if (receiverRegistered) return;
+        if (receiverRegistered) {
+            return;
+        }
 
         IntentFilter filter =
                 new IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE);
@@ -246,5 +297,17 @@ public class AppUpdateManager {
         }
 
         receiverRegistered = true;
+    }
+
+    public void destroy() {
+        executor.shutdownNow();
+
+        if (receiverRegistered) {
+            try {
+                activity.unregisterReceiver(downloadReceiver);
+            } catch (Exception ignored) {
+            }
+            receiverRegistered = false;
+        }
     }
 }
