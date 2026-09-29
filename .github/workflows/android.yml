@@ -1,15 +1,19 @@
-name: Build Android APK
+name: Build and Publish ViewNyang APK
 
 on:
   workflow_dispatch:
   push:
-    branches: [ "main" ]
+    branches: [ "stable" ]
+
+concurrency:
+  group: viewnyang-stable-build
+  cancel-in-progress: true
 
 jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
 
     steps:
       - name: Checkout
@@ -21,16 +25,52 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      - name: Restore signing keystore
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: viewnyang-debug-signing-v1
+
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "9.6.0"
 
-      - name: Build debug APK
+      - name: Build APK
         run: gradle :app:assembleDebug --stacktrace
 
-      - name: Upload APK
+      - name: Prepare update files
+        shell: bash
+        run: |
+          VERSION_NAME=$(grep -oP 'versionName = "\K[^"]+' app/build.gradle.kts | head -1)
+          VERSION_CODE=$(grep -oP 'versionCode = \K[0-9]+' app/build.gradle.kts | head -1)
+          cp app/build/outputs/apk/debug/app-debug.apk viewnyang.apk
+
+          cat > latest.json <<EOF
+          {
+            "versionCode": ${VERSION_CODE},
+            "versionName": "${VERSION_NAME}",
+            "url": "https://github.com/cptu527/hanview-android/releases/download/latest/viewnyang.apk",
+            "notes": "실시간 번역 안정화 및 앱 내 업데이트 지원"
+          }
+          EOF
+
+          echo "VERSION_NAME=${VERSION_NAME}" >> "$GITHUB_ENV"
+
+      - name: Publish latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          if gh release view latest >/dev/null 2>&1; then
+            gh release upload latest viewnyang.apk latest.json --clobber
+            gh release edit latest               --title "뷰냥 ${VERSION_NAME}"               --notes "앱 안에서 바로 받을 수 있는 최신 뷰냥 APK입니다."
+          else
+            gh release create latest               viewnyang.apk               latest.json               --target "$GITHUB_SHA"               --title "뷰냥 ${VERSION_NAME}"               --notes "앱 안에서 바로 받을 수 있는 최신 뷰냥 APK입니다."
+          fi
+
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HanView-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: ViewNyang-${{ env.VERSION_NAME }}
+          path: viewnyang.apk
