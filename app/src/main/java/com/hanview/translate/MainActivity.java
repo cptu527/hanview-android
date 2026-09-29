@@ -23,7 +23,6 @@ public class MainActivity extends Activity {
     private static final int REQ_NOTIFICATIONS = 1003;
 
     private TextView overlayStatus;
-    private TextView accessibilityStatus;
     private TextView updateBadge;
     private Button updateButton;
     private AppUpdateManager updateManager;
@@ -113,6 +112,7 @@ public class MainActivity extends Activity {
                 "• 스크롤하면 새 글자를 자동으로 다시 인식\n" +
                 "• 한국어 문장은 건드리지 않음\n" +
                 "• 중국어·일본어·영어 등 여러 언어를 한국어로 번역\n" +
+                "• 만화/이미지의 세로 글자도 가로 한국어로 표시\n" +
                 "• 같은 문장은 캐시해 더 빠르게 표시"
         );
         root.addView(liveInfo);
@@ -124,16 +124,6 @@ public class MainActivity extends Activity {
         Button overlayButton = button("다른 앱 위에 표시 허용");
         overlayButton.setOnClickListener(v -> requestOverlayPermission());
         root.addView(overlayButton, spaced());
-
-        root.addView(sectionTitle("자연스러운 번역 표시 권한"));
-        accessibilityStatus = infoBox("");
-        root.addView(accessibilityStatus, spaced());
-
-        Button accessibilityButton = button("뷰냥 접근성 서비스 켜기");
-        accessibilityButton.setOnClickListener(v ->
-                startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-        );
-        root.addView(accessibilityButton, spaced());
 
         root.addView(sectionTitle("실시간 번역"));
         Button start = button("실시간 번역 시작");
@@ -153,7 +143,7 @@ public class MainActivity extends Activity {
 
         TextView guide = infoBox(
                 "사용법\n" +
-                "① 화면 위 표시 + 접근성 서비스를 한 번 허용\n" +
+                "① 화면 위 표시 권한을 한 번 허용\n" +
                 "② 실시간 번역 시작 → 화면 공유 허용\n" +
                 "③ 원하는 앱으로 돌아가 그냥 스크롤\n" +
                 "④ 원문 자리를 같은 배경색으로 가리고 한국어로 다시 표시\n" +
@@ -211,17 +201,6 @@ public class MainActivity extends Activity {
                         ? "✓ 화면 위 표시 권한이 허용되어 있어요."
                         : "권한이 필요해요. 아래 버튼을 눌러 허용해 주세요."
         );
-
-        if (accessibilityStatus != null) {
-            boolean accessibility =
-                    ViewNyangAccessibilityService.isEnabled(this);
-
-            accessibilityStatus.setText(
-                    accessibility
-                            ? "✓ 자연스러운 번역 표시가 켜져 있어요."
-                            : "접근성 설정에서 ‘뷰냥’을 켜주세요. 이 권한이 있어야 2번째 예시처럼 불투명하게 원문을 지우고 한국어를 표시할 수 있어요."
-            );
-        }
     }
 
     private void requestOverlayPermission() {
@@ -238,20 +217,6 @@ public class MainActivity extends Activity {
     }
 
     private void startTranslation() {
-        if (!ViewNyangAccessibilityService.isEnabled(this)) {
-            Toast.makeText(
-                    this,
-                    "먼저 접근성 설정에서 ‘뷰냥’을 켜주세요.",
-                    Toast.LENGTH_LONG
-            ).show();
-            startActivity(
-                    new Intent(
-                            Settings.ACTION_ACCESSIBILITY_SETTINGS
-                    )
-            );
-            return;
-        }
-
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
                 && !Settings.canDrawOverlays(this)) {
             Toast.makeText(
