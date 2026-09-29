@@ -1,0 +1,3 @@
+name = "hanview-translate"
+main = "server/worker.mjs"
+compatibility_date = "2026-09-29"
