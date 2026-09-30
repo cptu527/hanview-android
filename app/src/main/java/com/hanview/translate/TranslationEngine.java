@@ -26,7 +26,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 public class TranslationEngine {
     public static final String PREFS = "hanview";
-    private static final String CACHE_PREFS = "viewnyang_local_natural_cache_v3";
+    private static final String CACHE_PREFS = "viewnyang_local_natural_cache_v4";
     private static final String CACHE_INDEX = "_index";
     private static final int MAX_PERSISTED_PAGES = 120;
 
@@ -121,8 +121,8 @@ public class TranslationEngine {
         String key =
                 (
                         localContextTranslator.isReady()
-                                ? "llm-v2:"
-                                : "local-v3:"
+                                ? "llm-v3:"
+                                : "local-v4:"
                 )
                         + buildPageKey(
                         blocks,
