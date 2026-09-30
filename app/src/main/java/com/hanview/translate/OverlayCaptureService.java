@@ -703,8 +703,10 @@ public class OverlayCaptureService extends Service {
                         return;
                     }
 
-                    if (containsKana(candidates)
-                            || containsLatinWithoutHan(candidates)) {
+                    // Only a real Japanese signal (kana) may finish after the
+                    // Japanese recognizer. Latin UI text alone must NOT short-circuit
+                    // the Chinese pass, otherwise Taobao pages can lose all Han text.
+                    if (containsKana(candidates)) {
                         finishAndRecycle(
                                 candidates,
                                 bitmap,
