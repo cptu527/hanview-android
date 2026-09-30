@@ -70,7 +70,7 @@ public class GptTranslationLabActivity extends Activity {
 
         TextView title =
                 text(
-                        "GPT 번역 검증실",
+                        "ChatGPT 연결 / 번역 테스트",
                         24,
                         Color.rgb(
                                 24,
@@ -86,9 +86,9 @@ public class GptTranslationLabActivity extends Activity {
 
         TextView info =
                 text(
-                        "뷰냥 실시간 번역과 완전히 분리된 테스트 화면입니다.\n"
-                                + "스크린샷 이미지를 GPT가 직접 읽고, OCR 조각에 의존하지 않고 페이지 전체 문맥으로 한국어를 만듭니다.\n"
-                                + "여기서 번역 품질을 먼저 확인한 뒤 실시간 오버레이에 연결합니다.",
+                        "여기서 연결한 ChatGPT 플랜을 실시간 번역의 기본 서버 엔진으로 사용합니다.\n"
+                                + "실시간 번역에서는 OCR로 인식한 문장과 위치 정보를 ChatGPT 서버에 보내 자연스러운 한국어를 받고, 이 테스트 화면에서는 스크린샷을 GPT가 직접 읽는 품질도 확인할 수 있습니다.\n"
+                                + "서버 사용이 불가능할 때만 가벼운 기기 번역으로 자동 전환합니다.",
                         14,
                         Color.rgb(
                                 74,
