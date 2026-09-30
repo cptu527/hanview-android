@@ -82,9 +82,13 @@ class LocalContextTranslator(
                 block.original,
                 block.bounds
             ).also {
+                it.translated = block.translated
                 it.verticalSource = block.verticalSource
                 it.sourceGlyphWidthPx = block.sourceGlyphWidthPx
                 it.sourceTextSizePx = block.sourceTextSizePx
+                it.backgroundColor = block.backgroundColor
+                it.textColor = block.textColor
+                it.solidBackground = block.solidBackground
             }
         }
 
