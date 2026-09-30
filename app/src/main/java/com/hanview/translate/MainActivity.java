@@ -267,9 +267,17 @@ public class MainActivity extends Activity {
                                 + "\n실시간 번역은 GPT를 우선 사용합니다."
                 );
             } else {
+                String lastError =
+                        chatGptPlanClient.lastError();
+
                 chatGptStatus.setText(
                         "ChatGPT 연결 안 됨\n"
-                                + "아래 버튼으로 한 번 연결하면 GPT 번역을 화면 위에 그대로 표시할 수 있어요."
+                                + (
+                                lastError == null
+                                        || lastError.trim().isEmpty()
+                                        ? "아래 버튼으로 한 번 연결하면 GPT 번역을 화면 위에 그대로 표시할 수 있어요."
+                                        : "마지막 연결 오류: " + lastError
+                        )
                 );
             }
 
