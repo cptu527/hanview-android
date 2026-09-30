@@ -166,7 +166,39 @@ public class MainActivity extends Activity {
         );
         root.addView(modelInfo, spaced());
 
-        root.addView(sectionTitle("화면 위 표시 권한"));
+        root.addView(sectionTitle("뷰냥 브라우저 번역"));
+
+        TextView browserInfo = infoBox(
+                "추천 방식\n" +
+                "• 뷰냥 안에서 주소를 직접 열고 현재 보이는 웹페이지를 번역합니다.\n" +
+                "• 화면 공유 권한이나 다른 앱 위 표시 권한이 필요하지 않습니다.\n" +
+                "• 현재 화면의 글자를 기기에서 OCR한 뒤 ChatGPT 서버로 번역합니다."
+        );
+        root.addView(browserInfo, spaced());
+
+        Button browserButton =
+                button("뷰냥 브라우저 열기");
+        browserButton.setTextSize(18);
+        browserButton.setPadding(
+                dp(16),
+                dp(16),
+                dp(16),
+                dp(16)
+        );
+        browserButton.setOnClickListener(v ->
+                startActivity(
+                        new Intent(
+                                this,
+                                BrowserTranslateActivity.class
+                        )
+                )
+        );
+        root.addView(
+                browserButton,
+                spaced()
+        );
+
+        root.addView(sectionTitle("화면 공유 번역 (기존 방식)"));
         overlayStatus = infoBox("");
         root.addView(overlayStatus, spaced());
 
@@ -218,7 +250,7 @@ public class MainActivity extends Activity {
         root.addView(updateButton, spaced());
 
         TextView privacy = text(
-                "화면 캡처와 OCR은 기기에서 처리합니다. ChatGPT가 연결된 경우 OCR로 인식된 외국어 텍스트와 좌표 정보가 번역을 위해 ChatGPT 서버로 전송됩니다. 번역 레이어는 원래 앱을 직접 수정하지 않고 화면 위에 표시됩니다.",
+                "뷰냥 브라우저 번역에서는 현재 보이는 웹페이지 화면을 기기에서 OCR하고, 인식된 외국어 텍스트와 위치 정보만 ChatGPT 서버로 전송합니다. 화면 공유 번역도 동일하게 OCR 텍스트를 서버에 전송합니다.",
                 12,
                 Color.rgb(112, 119, 132)
         );
