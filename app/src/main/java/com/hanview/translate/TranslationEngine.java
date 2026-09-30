@@ -154,7 +154,7 @@ public class TranslationEngine {
         }
 
         String refinedKey =
-                "llm-v11:"
+                "llm-v12:"
                         + baseKey;
 
         if (useContextModel) {
@@ -214,7 +214,7 @@ public class TranslationEngine {
         }
 
         String fastKey =
-                "fast-v11:"
+                "fast-v12:"
                         + baseKey;
 
         List<String> fastCached =
@@ -364,15 +364,8 @@ public class TranslationEngine {
         int kana = 0;
         int han = 0;
         int meaningfulChars = 0;
-        int verticalBlocks = 0;
 
         for (OcrBlock block : blocks) {
-            if (block.verticalSource
-                    || block.bounds.height()
-                    > block.bounds.width() * 1.45f) {
-                verticalBlocks++;
-            }
-
             String value =
                     block.original;
 
@@ -402,16 +395,11 @@ public class TranslationEngine {
             }
         }
 
-        // Japanese vertical OCR often drops kana first and leaves mostly kanji.
-        // Treat vertical CJK manga as a context-model job instead of incorrectly
-        // routing it to the small Chinese/ML Kit translator.
-        if (verticalBlocks > 0
-                && kana + han >= 2) {
-            return true;
-        }
-
-        return kana >= 2
-                && meaningfulChars >= 2;
+        // Vertical Japanese OCR can lose every kana character and leave only
+        // kanji. If the 4B model is installed, route real CJK text to it rather
+        // than guessing "Chinese" and falling into ML Kit.
+        return meaningfulChars >= 2
+                && (kana >= 1 || han >= 2);
     }
 
     private void startContextRefinement(
@@ -886,9 +874,16 @@ public class TranslationEngine {
                                 == 0) {
                             if (translatedCount.get()
                                     == 0) {
-                                callback.onError(
-                                        "간이 기기 번역 모델을 준비하지 못했어요. 4B 정밀 모델이 설치되어 있으면 다시 시도하고, 미설치라면 뷰냥에서 정밀 모델을 먼저 설치해 주세요."
-                                );
+                                if (hasCjkText(allBlocks)
+                                        && !localContextTranslator.isReady()) {
+                                    callback.onError(
+                                            "4B 정밀 번역 모델이 설치되어 있지 않거나 모델 파일을 확인하지 못했어요. 뷰냥 앱을 열어 '4B 정밀 번역 모델 설치됨' 표시를 확인해 주세요."
+                                    );
+                                } else {
+                                    callback.onError(
+                                            "간이 기기 번역 모델 다운로드에 실패했어요. 네트워크 연결을 확인한 뒤 다시 시도해 주세요."
+                                    );
+                                }
                             } else {
                                 callback.onSuccess(
                                         allBlocks,
@@ -899,6 +894,37 @@ public class TranslationEngine {
                     }
             );
         }
+    }
+
+    private boolean hasCjkText(
+            List<OcrBlock> blocks
+    ) {
+        for (OcrBlock block : blocks) {
+            String value =
+                    block.original;
+
+            if (value == null) {
+                continue;
+            }
+
+            for (int i = 0;
+                 i < value.length();
+                 i++) {
+                char c =
+                        value.charAt(i);
+
+                if ((c >= 0x3040
+                        && c <= 0x30FF)
+                        || (c >= 0x3400
+                        && c <= 0x4DBF)
+                        || (c >= 0x4E00
+                        && c <= 0x9FFF)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     private interface GroupResult {
