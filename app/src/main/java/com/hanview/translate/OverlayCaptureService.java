@@ -85,6 +85,7 @@ public class OverlayCaptureService extends Service {
     private volatile long translationRetryAfterMs = 0L;
     private long lastErrorToastMs = -15000L;
     private volatile boolean cleanCaptureRequested = true;
+    private long lastBubbleTapMs = 0L;
 
     private int[] lastMonitorFingerprint = null;
     private final List<Rect> activePatchBounds =
@@ -1867,7 +1868,14 @@ public class OverlayCaptureService extends Service {
                         dp(8),
                         captureWidth - dp(62)
                 );
-        bubbleParams.y = dp(270);
+        // Keep the control away from browser address/page controls by default.
+        bubbleParams.y =
+                Math.max(
+                        dp(120),
+                        Math.round(
+                                captureHeight * 0.55f
+                        )
+                );
 
         final float[] downX = new float[1];
         final float[] downY = new float[1];
@@ -1914,9 +1922,24 @@ public class OverlayCaptureService extends Service {
 
                             if (Math.hypot(dx, dy)
                                     < dp(10)) {
-                                setLiveEnabled(
-                                        !liveEnabled
-                                );
+                                long now =
+                                        SystemClock.uptimeMillis();
+
+                                if (!liveEnabled) {
+                                    lastBubbleTapMs = 0L;
+                                    setLiveEnabled(true);
+                                } else if (now - lastBubbleTapMs
+                                        <= 650L) {
+                                    lastBubbleTapMs = 0L;
+                                    setLiveEnabled(false);
+                                } else {
+                                    lastBubbleTapMs = now;
+                                    Toast.makeText(
+                                            OverlayCaptureService.this,
+                                            "번역을 끄려면 한 번 더 눌러 주세요.",
+                                            Toast.LENGTH_SHORT
+                                    ).show();
+                                }
                             }
                             return true;
 
