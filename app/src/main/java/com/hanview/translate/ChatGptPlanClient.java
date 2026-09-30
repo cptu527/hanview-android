@@ -894,6 +894,7 @@ public class ChatGptPlanClient {
                         + "Translate faithfully but rewrite into fluent, publication-quality Korean that sounds originally written in Korean. Avoid literal Japanese syntax and needless pronouns. "
                         + "Do not summarize, explain, censor, add translation notes, or invent details. Preserve every meaningful statement in reading order. "
                         + "If the page is Chinese or another language, translate it naturally into Korean using the same quality standard. "
+                        + "Ignore browser chrome, status/navigation bars, ViewNyang's floating ON/OFF/GPT control, and other app UI unless the user-visible foreign text itself is the content being translated. "
                         + "Return ONLY JSON with this exact shape: {\"page_text\":\"...\"}. Never use Markdown.";
 
         JSONArray content =
