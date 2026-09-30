@@ -46,6 +46,7 @@ public class TranslationPatchManager {
                 new ArrayList<>();
 
         int verticalCount = 0;
+        boolean hasPageTranslation = false;
 
         for (OcrBlock block : blocks) {
             String text =
@@ -65,6 +66,10 @@ public class TranslationPatchManager {
 
             translated.add(block);
 
+            if (block.pageTranslation) {
+                hasPageTranslation = true;
+            }
+
             if (block.verticalSource
                     || block.bounds.height()
                     > block.bounds.width() * 1.8f) {
@@ -79,7 +84,7 @@ public class TranslationPatchManager {
         // Manga pages with several vertical paragraphs are unreadable when each
         // Korean paragraph is painted on top of its source. Use one compact
         // translation panel instead, preserving the artwork and the Japanese text.
-        if (verticalCount >= 2) {
+        if (hasPageTranslation || verticalCount >= 2) {
             showMangaPanel(
                     translated,
                     screenWidth,
