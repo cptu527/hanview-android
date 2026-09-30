@@ -667,6 +667,14 @@ public class OverlayCaptureService extends Service {
             Bitmap bitmap,
             int frameGeneration
     ) {
+        mainHandler.post(() -> {
+            if (bubble != null
+                    && liveEnabled
+                    && displayGate.canDisplay(frameGeneration)) {
+                bubble.setText("OCR…");
+            }
+        });
+
         InputImage input =
                 InputImage.fromBitmap(
                         bitmap,
@@ -956,6 +964,11 @@ public class OverlayCaptureService extends Service {
                     lastMonitorFingerprint = null;
                     cleanCaptureRequested = true;
                 }
+                if (bubble != null
+                        && liveEnabled
+                        && displayGate.canDisplay(frameGeneration)) {
+                    bubble.setText("없음");
+                }
             });
             return;
         }
@@ -971,19 +984,54 @@ public class OverlayCaptureService extends Service {
             @Override public void onSuccess(List<OcrBlock> translated, boolean usedAi) {
                 mainHandler.post(() -> {
                     if (!liveEnabled || !displayGate.isVisible() || !displayGate.canDisplay(frameGeneration)) return;
+                    boolean visibleResult = false;
+
                     if (patchManager != null) {
-                        patchManager.show(translated, captureWidth, captureHeight);
+                        patchManager.show(
+                                translated,
+                                captureWidth,
+                                captureHeight
+                        );
                         activePatchBounds.clear();
-                        activePatchBounds.addAll(patchManager.getPatchBounds());
-                        cleanCaptureRequested = !patchManager.hasPatches();
+                        activePatchBounds.addAll(
+                                patchManager.getPatchBounds()
+                        );
+                        visibleResult =
+                                patchManager.hasPatches();
+                        cleanCaptureRequested =
+                                !visibleResult;
                     }
+
                     translationPending = false;
+
                     if (bubble != null) {
                         bubble.setText(
-                                usedAi
-                                        ? "문"
-                                        : "한"
+                                visibleResult
+                                        ? (
+                                        usedAi
+                                                ? "문"
+                                                : "한"
+                                )
+                                        : "!"
                         );
+                    }
+
+                    if (!visibleResult) {
+                        long now =
+                                SystemClock.uptimeMillis();
+
+                        if (now - lastErrorToastMs
+                                >= 15000L) {
+                            lastErrorToastMs = now;
+                            Toast.makeText(
+                                    OverlayCaptureService.this,
+                                    "번역은 끝났지만 화면 표시가 실패했어요. 자동으로 다시 시도합니다.",
+                                    Toast.LENGTH_LONG
+                            ).show();
+                        }
+
+                        translationRetryAfterMs =
+                                now + 1000L;
                     }
                 });
             }
