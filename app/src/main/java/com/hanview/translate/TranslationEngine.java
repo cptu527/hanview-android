@@ -132,6 +132,10 @@ public class TranslationEngine {
                         && localContextTranslator.isReady()
                         && shouldUseContextModel(blocks);
 
+        if (!useContextModel) {
+            localContextTranslator.resetContext();
+        }
+
         String refinedKey =
                 "llm-v5:"
                         + baseKey;
