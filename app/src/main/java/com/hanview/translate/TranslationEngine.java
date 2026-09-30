@@ -143,8 +143,7 @@ public class TranslationEngine {
                 );
 
         boolean useContextModel =
-                "ja".equals(pageHint)
-                        && localContextTranslator.isReady()
+                localContextTranslator.isReady()
                         && shouldUseContextModel(blocks);
 
         if (!useContextModel) {
@@ -360,9 +359,17 @@ public class TranslationEngine {
             List<OcrBlock> blocks
     ) {
         int kana = 0;
+        int han = 0;
         int meaningfulChars = 0;
+        int verticalBlocks = 0;
 
         for (OcrBlock block : blocks) {
+            if (block.verticalSource
+                    || block.bounds.height()
+                    > block.bounds.width() * 1.45f) {
+                verticalBlocks++;
+            }
+
             String value =
                     block.original;
 
@@ -383,13 +390,23 @@ public class TranslationEngine {
                 if (ch >= 0x3040
                         && ch <= 0x30FF) {
                     kana++;
+                } else if ((ch >= 0x3400
+                        && ch <= 0x4DBF)
+                        || (ch >= 0x4E00
+                        && ch <= 0x9FFF)) {
+                    han++;
                 }
             }
         }
 
-        // Once the page has a real Japanese signal, use the 4B model even for
-        // one bubble or horizontal Japanese. Requiring multiple vertical boxes
-        // made ordinary dialogue silently fall back to the weaker ML Kit path.
+        // Japanese vertical OCR often drops kana first and leaves mostly kanji.
+        // Treat vertical CJK manga as a context-model job instead of incorrectly
+        // routing it to the small Chinese/ML Kit translator.
+        if (verticalBlocks > 0
+                && kana + han >= 2) {
+            return true;
+        }
+
         return kana >= 2
                 && meaningfulChars >= 2;
     }
@@ -867,7 +884,7 @@ public class TranslationEngine {
                             if (translatedCount.get()
                                     == 0) {
                                 callback.onError(
-                                        "무료 기기 번역 모델을 준비하지 못했어요. 인터넷에 연결한 상태에서 한 번 더 시도해 주세요."
+                                        "간이 기기 번역 모델을 준비하지 못했어요. 4B 정밀 모델이 설치되어 있으면 다시 시도하고, 미설치라면 뷰냥에서 정밀 모델을 먼저 설치해 주세요."
                                 );
                             } else {
                                 callback.onSuccess(
