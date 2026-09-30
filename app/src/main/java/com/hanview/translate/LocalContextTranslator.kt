@@ -26,7 +26,10 @@ class LocalContextTranslator(
     context: Context
 ) {
     interface Callback {
-        fun onSuccess(translations: Map<Int, String>)
+        fun onSuccess(
+            translations: Map<Int, String>,
+            pageText: String
+        )
         fun onError(message: String)
     }
 
@@ -43,6 +46,7 @@ class LocalContextTranslator(
     private val closed = AtomicBoolean(false)
     private val requestSequence = AtomicInteger(0)
     @Volatile private var previousPageContext: String = ""
+    @Volatile private var activeBackend: String = "none"
 
     fun isReady(): Boolean = isModelReady(appContext)
 
@@ -53,6 +57,8 @@ class LocalContextTranslator(
     fun resetContext() {
         previousPageContext = ""
     }
+
+    fun backendLabel(): String = activeBackend
 
     fun warmUp() {
         if (!isReady() || closed.get()) return
@@ -101,18 +107,20 @@ class LocalContextTranslator(
 
                 val systemInstruction = Contents.of(
                     "/no_think\n" +
-                            "너는 일본어 세로쓰기 만화 전문 한국어 번역가다. " +
-                            "입력 배열은 이미 만화의 실제 읽는 순서(오른쪽 열에서 왼쪽 열, 각 열은 위에서 아래)로 정렬되어 있다. " +
-                            "절대로 순서를 재배열하지 말고 reading_order 순서 그대로 장면을 이해한다. " +
-                            "각 item의 text는 서로 다른 세로열일 수 있으므로 임의로 두 item을 이어 붙여 새 문장을 만들지 않는다. " +
-                            "다만 앞뒤 item의 의미는 문맥으로만 참고해 생략된 주어·대상·인물 관계·존댓말·반말·감정을 자연스럽게 복원한다. " +
-                            "직역체를 피하고 한국 만화 대사처럼 짧고 자연스럽게 쓴다. " +
-                            "원문에 없는 정보, 설명, 해설, 번역 노트, 요약은 절대 추가하지 않는다. " +
-                            "특히 '한국어로 번역됨', '자연스럽게 번역', '문장은', '유지됩니다', '원문의 의미' 같은 메타 설명을 절대 출력하지 않는다. " +
-                            "고유명사·숫자·의미는 보존하고, 원문의 질문은 질문으로, 호소는 호소로 유지한다. " +
-                            "출력은 반드시 JSON 하나만 반환한다: " +
-                            "{\"translations\":[{\"id\":0,\"text\":\"번역문\"}]}. " +
-                            "모든 입력 id를 정확히 한 번씩 반환하고 text에는 번역문 외의 말을 넣지 않는다."
+                            "너는 일본어 세로쓰기 만화를 한국어로 현지화하는 전문 번역가다. " +
+                            "가장 중요한 목표는 독자가 장면의 의미와 감정 흐름을 한 번에 이해하게 만드는 것이다. " +
+                            "입력은 이미 오른쪽 열에서 왼쪽 열 순서로 정렬되어 있다. " +
+                            "한 문장이 여러 세로열에 걸쳐 끊겼다면 반드시 앞뒤를 이어 하나의 자연스러운 문장으로 복원한다. " +
+                            "반대로 서로 다른 대사나 문장을 억지로 합치지 않는다. " +
+                            "생략된 주어·목적어, 누가 누구에게 말하는지, 가족관계, 존댓말/반말, 호칭, 감정, 앞뒤 맥락을 적극적으로 복원한다. " +
+                            "원문 의미는 보존하되 일본어 직역투는 버리고 실제 한국 만화 대사처럼 자연스럽게 쓴다. " +
+                            "초벌 한국어가 있더라도 원문 일본어가 기준이며 오역은 반드시 고친다. " +
+                            "설명, 해설, 번역 노트, 메타 발언, 요약은 절대 쓰지 않는다. " +
+                            "모든 원문 내용을 빠짐없이 읽는 순서대로 번역한다. " +
+                            "출력은 반드시 JSON 하나만 반환한다. 형식은 " +
+                            "{\"page_text\":\"페이지 전체를 읽는 순서대로 자연스럽게 이어 쓴 최종 한국어 번역\"," +
+                            "\"translations\":[{\"id\":0,\"text\":\"해당 항목 번역\"}]}. " +
+                            "page_text는 이 페이지의 최종 읽기용 번역이며 절대 비워두지 않는다."
                 )
 
                 val config = ConversationConfig(
@@ -134,15 +142,20 @@ class LocalContextTranslator(
                     return@launch
                 }
 
-                if (parsed.isEmpty()) {
+                if (parsed.translations.isEmpty()
+                    && parsed.pageText.isBlank()
+                ) {
                     callback.onError("로컬 문맥 모델의 번역 결과를 읽지 못했어요.")
                 } else {
                     previousPageContext =
                         buildPreviousContext(
                             snapshot,
-                            parsed
+                            parsed.translations
                         )
-                    callback.onSuccess(parsed)
+                    callback.onSuccess(
+                        parsed.translations,
+                        parsed.pageText
+                    )
                 }
             } catch (t: Throwable) {
                 if (sequence != requestSequence.get()) {
@@ -168,16 +181,44 @@ class LocalContextTranslator(
                 throw IllegalStateException("로컬 문맥 모델 파일이 없어요.")
             }
 
-            val created = Engine(
-                EngineConfig(
-                    modelPath = file.absolutePath,
-                    backend = Backend.CPU(),
-                    maxNumTokens = 4096,
-                    cacheDir = appContext.cacheDir.absolutePath
+            fun createEngine(
+                backend: Backend,
+                label: String
+            ): Engine {
+                val created = Engine(
+                    EngineConfig(
+                        modelPath = file.absolutePath,
+                        backend = backend,
+                        maxNumTokens = 2048,
+                        cacheDir = appContext.cacheDir.absolutePath
+                    )
                 )
-            )
 
-            created.initialize()
+                created.initialize()
+                activeBackend = label
+                return created
+            }
+
+            val created =
+                try {
+                    createEngine(
+                        Backend.GPU(),
+                        "gpu"
+                    )
+                } catch (gpuError: Throwable) {
+                    try {
+                        createEngine(
+                            Backend.CPU(),
+                            "cpu"
+                        )
+                    } catch (cpuError: Throwable) {
+                        throw IllegalStateException(
+                            "로컬 문맥 모델 실행 실패 (GPU/CPU 모두 실패)",
+                            cpuError
+                        )
+                    }
+                }
+
             engine = created
             created
         }
@@ -218,13 +259,12 @@ class LocalContextTranslator(
         val root = JSONObject()
             .put(
                 "task",
-                "Act as a professional Japanese-to-Korean manga localizer. " +
-                        "For each item, source_ja is authoritative and draft_ko is only a rough machine draft. " +
-                        "Correct any mistranslation in the draft, then rewrite it into fluent Korean dialogue/prose " +
-                        "that sounds as if it was originally written in Korean. Preserve each id and reading order. " +
-                        "Use nearby items and previous_page_context to resolve omitted subjects, who is speaking to whom, " +
-                        "honorifics, emotional tone and consistent speech level. Keep the meaning faithful; do not summarize, " +
-                        "explain, sanitize, merge unrelated items, or invent details."
+                "Translate the visible Japanese manga page into one coherent Korean reading translation. " +
+                        "source_ja is authoritative and draft_ko is only a rough draft. Fix all draft mistakes. " +
+                        "Adjacent items may be fragments of the same sentence, so merge them when the Japanese meaning requires it. " +
+                        "Keep unrelated speech separate. Preserve reading order and all meaning. " +
+                        "Use neighboring items and previous_page_context to resolve omitted subjects, relationships, " +
+                        "honorifics, emotion and consistent speech level. Return both page_text and per-item translations."
             )
             .put("items", items)
 
@@ -276,9 +316,14 @@ class LocalContextTranslator(
         }
     }
 
+    private data class ParsedResult(
+        val translations: Map<Int, String>,
+        val pageText: String
+    )
+
     private fun parseResponse(
         raw: String
-    ): Map<Int, String> {
+    ): ParsedResult {
         var clean = raw.trim()
         clean = clean
             .removePrefix("```json")
@@ -295,24 +340,33 @@ class LocalContextTranslator(
 
         val root = JSONObject(clean)
         val list = root.optJSONArray("translations")
-            ?: return emptyMap()
-
         val out = LinkedHashMap<Int, String>()
 
-        for (i in 0 until list.length()) {
-            val item = list.optJSONObject(i) ?: continue
-            val id = item.optInt("id", Int.MIN_VALUE)
-            val text = item.optString("text", "").trim()
+        if (list != null) {
+            for (i in 0 until list.length()) {
+                val item = list.optJSONObject(i) ?: continue
+                val id = item.optInt("id", Int.MIN_VALUE)
+                val text = item.optString("text", "").trim()
 
-            if (id != Int.MIN_VALUE
-                && text.isNotEmpty()
-                && !looksLikeMetaCommentary(text)
-            ) {
-                out[id] = text
+                if (id != Int.MIN_VALUE
+                    && text.isNotEmpty()
+                    && !looksLikeMetaCommentary(text)
+                ) {
+                    out[id] = text
+                }
             }
         }
 
-        return out
+        val pageText = root
+            .optString("page_text", "")
+            .trim()
+            .takeIf { it.isNotEmpty() && !looksLikeMetaCommentary(it) }
+            ?: ""
+
+        return ParsedResult(
+            translations = out,
+            pageText = pageText
+        )
     }
 
     private fun looksLikeMetaCommentary(
