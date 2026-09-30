@@ -6,6 +6,7 @@ import com.google.ai.edge.litertlm.Contents
 import com.google.ai.edge.litertlm.ConversationConfig
 import com.google.ai.edge.litertlm.Engine
 import com.google.ai.edge.litertlm.EngineConfig
+import com.google.ai.edge.litertlm.ThinkingConfig
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -134,16 +135,58 @@ class LocalContextTranslator(
                 )
 
                 val config = ConversationConfig(
-                    systemInstruction = systemInstruction
+                    systemInstruction = systemInstruction,
+                    extraContext = mapOf(
+                        "enable_thinking" to false
+                    ),
+                    thinkingConfig = ThinkingConfig(
+                        enableThinking = false
+                    )
                 )
 
-                val responseText = activeEngine
-                    .createConversation(config)
-                    .use { conversation ->
-                        conversation.sendMessage(
+                fun generateOnce(
+                    promptText: String,
+                    maxOutputTokens: Int
+                ): String =
+                    activeEngine
+                        .createConversation(config)
+                        .use { conversation ->
+                            conversation.sendMessage(
+                                promptText,
+                                extraContext = mapOf(
+                                    "enable_thinking" to false
+                                ),
+                                maxOutputToken = maxOutputTokens,
+                                thinkingConfig = ThinkingConfig(
+                                    enableThinking = false
+                                )
+                            ).toString()
+                        }
+
+                val responseText =
+                    try {
+                        generateOnce(
                             prompt,
-                            maxOutputToken = 420
-                        ).toString()
+                            420
+                        )
+                    } catch (firstError: Throwable) {
+                        if (!isInputContextTooLong(firstError)) {
+                            throw firstError
+                        }
+
+                        // The 1.7B artifact supports a 4096-token context, but
+                        // a previous-page carry-over can still push a dense manga
+                        // page over the runtime's safety threshold. Retry once
+                        // without history instead of surfacing INVALID_ARGUMENT.
+                        previousPageContext = ""
+
+                        generateOnce(
+                            buildPrompt(
+                                snapshot,
+                                reconstructed
+                            ),
+                            360
+                        )
                     }
 
                 val parsed = parseResponse(responseText)
@@ -182,6 +225,39 @@ class LocalContextTranslator(
         }
     }
 
+    private fun isInputContextTooLong(
+        error: Throwable
+    ): Boolean {
+        var current: Throwable? = error
+
+        while (current != null) {
+            val message =
+                current.message
+                    .orEmpty()
+                    .lowercase()
+
+            if (message.contains(
+                    "input context length is too long"
+                )
+                || message.contains(
+                    "input token ids are too long"
+                )
+                || message.contains(
+                    "exceeding the maximum number of tokens"
+                )
+                || message.contains(
+                    "max_num_tokens"
+                )
+            ) {
+                return true
+            }
+
+            current = current.cause
+        }
+
+        return false
+    }
+
     private suspend fun ensureEngine(): Engine {
         engine?.let { return it }
 
@@ -201,7 +277,7 @@ class LocalContextTranslator(
                     EngineConfig(
                         modelPath = file.absolutePath,
                         backend = backend,
-                        maxNumTokens = 1536,
+                        maxNumTokens = 4096,
                         cacheDir = appContext.cacheDir.absolutePath
                     )
                 )
