@@ -1276,7 +1276,8 @@ public class OverlayCaptureService extends Service {
                 if (rect == null
                         || value.isEmpty()
                         || !hasForeignLetters(value)
-                        || isKoreanDominant(value)) {
+                        || isKoreanDominant(value)
+                        || isLikelyBrowserOrSystemUi(value, rect)) {
                     continue;
                 }
 
@@ -1310,6 +1311,61 @@ public class OverlayCaptureService extends Service {
         }
 
         return out;
+    }
+
+    private boolean isLikelyBrowserOrSystemUi(
+            String value,
+            Rect rect
+    ) {
+        if (captureHeight <= 0) {
+            return false;
+        }
+
+        boolean hasCjkOrKana = false;
+
+        for (int i = 0; i < value.length(); i++) {
+            char ch = value.charAt(i);
+
+            if ((ch >= '\u3040' && ch <= '\u30FF')
+                    || (ch >= '\u3400' && ch <= '\u4DBF')
+                    || (ch >= '\u4E00' && ch <= '\u9FFF')
+                    || (ch >= '\u0900' && ch <= '\u097F')) {
+                hasCjkOrKana = true;
+                break;
+            }
+        }
+
+        if (hasCjkOrKana) {
+            return false;
+        }
+
+        // Browser address bars, gallery controls, status/navigation bars and
+        // short Latin UI labels should not become translation cards.
+        int topChrome =
+                Math.round(
+                        captureHeight * 0.18f
+                );
+        int bottomChrome =
+                Math.round(
+                        captureHeight * 0.90f
+                );
+
+        if (rect.bottom <= topChrome
+                || rect.top >= bottomChrome) {
+            return true;
+        }
+
+        String compact =
+                value.replaceAll(
+                        "[^A-Za-z0-9]",
+                        ""
+                );
+
+        return compact.length() <= 18
+                && rect.top
+                < Math.round(
+                captureHeight * 0.23f
+        );
     }
 
     private boolean hasForeignLetters(String value) {
