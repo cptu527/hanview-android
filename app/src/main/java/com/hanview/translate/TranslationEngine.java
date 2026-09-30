@@ -26,7 +26,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 public class TranslationEngine {
     public static final String PREFS = "hanview";
-    private static final String CACHE_PREFS = "viewnyang_local_natural_cache_v4";
+    private static final String CACHE_PREFS = "viewnyang_local_natural_cache_v5";
     private static final String CACHE_INDEX = "_index";
     private static final int MAX_PERSISTED_PAGES = 120;
 
@@ -141,7 +141,7 @@ public class TranslationEngine {
         }
 
         String refinedKey =
-                "llm-v5:"
+                "llm-v6:"
                         + baseKey;
 
         if (useContextModel) {
@@ -168,7 +168,7 @@ public class TranslationEngine {
         // and Japanese manga gets this immediately while the larger LLM
         // refines the same screen in the background.
         String fastKey =
-                "fast-v5:"
+                "fast-v6:"
                         + baseKey;
 
         List<String> fastCached =
