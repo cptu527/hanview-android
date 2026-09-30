@@ -7,6 +7,7 @@ import com.google.ai.edge.litertlm.Conversation
 import com.google.ai.edge.litertlm.ConversationConfig
 import com.google.ai.edge.litertlm.Engine
 import com.google.ai.edge.litertlm.EngineConfig
+import com.google.ai.edge.litertlm.ResponseFormat
 import com.google.ai.edge.litertlm.ThinkingConfig
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -166,8 +167,16 @@ class LocalContextTranslator(
                             "화자, 대상, 관계, 호칭, 존댓말/반말, 감정과 앞뒤 논리를 파악한 뒤 실제 한국 만화 대사처럼 자연스럽게 번역해라. " +
                             "원문의 의미, 비난 강도, 욕설, 성적 표현, 은어는 임의로 순화·과장·삭제하지 않는다. 모르는 내용은 만들어내지 않는다. " +
                             "각 id를 정확히 한 번씩 반환하고 중복하지 않는다. 설명·해설·번역 노트·메타 발언은 금지한다. " +
-                            "출력은 JSON 하나만 반환한다: {\"page_text\":\"\",\"translations\":[{\"id\":0,\"text\":\"최종 한국어\"}]}."
+                            "응답 값에는 실제 번역문만 넣고 필드 설명, 예시 문구, '최종 한국어' 같은 자리표시자를 절대 출력하지 않는다. " +
+                            "출력 구조는 앱이 제공하는 JSON 스키마를 정확히 따른다."
                 )
+
+                val responseFormat =
+                    ResponseFormat.json(
+                        buildResponseSchema(
+                            snapshot
+                        )
+                    )
 
                 val config = ConversationConfig(
                     systemInstruction = systemInstruction,
@@ -176,7 +185,8 @@ class LocalContextTranslator(
                     ),
                     thinkingConfig = ThinkingConfig(
                         enableThinking = false
-                    )
+                    ),
+                    enableResponseFormat = true
                 )
 
                 fun generateOnce(
@@ -199,7 +209,8 @@ class LocalContextTranslator(
                             maxOutputToken = maxOutputTokens,
                             thinkingConfig = ThinkingConfig(
                                 enableThinking = false
-                            )
+                            ),
+                            responseFormat = responseFormat
                         ).toString()
                     } finally {
                         if (activeConversation === conversation) {
@@ -238,7 +249,11 @@ class LocalContextTranslator(
                         )
                     }
 
-                val parsed = parseResponse(responseText)
+                val parsed =
+                    parseResponse(
+                        responseText,
+                        snapshot.map { it.id }.toSet()
+                    )
 
                 if (sequence != requestSequence.get()) {
                     return@withLock
@@ -702,8 +717,116 @@ class LocalContextTranslator(
         val pageText: String
     )
 
+    private fun buildResponseSchema(
+        blocks: List<OcrBlock>
+    ): String {
+        val validIds = JSONArray()
+
+        blocks.forEach { block ->
+            validIds.put(
+                block.id
+            )
+        }
+
+        val translationItem =
+            JSONObject()
+                .put(
+                    "type",
+                    "object"
+                )
+                .put(
+                    "properties",
+                    JSONObject()
+                        .put(
+                            "id",
+                            JSONObject()
+                                .put(
+                                    "type",
+                                    "integer"
+                                )
+                                .put(
+                                    "enum",
+                                    validIds
+                                )
+                        )
+                        .put(
+                            "text",
+                            JSONObject()
+                                .put(
+                                    "type",
+                                    "string"
+                                )
+                                .put(
+                                    "minLength",
+                                    1
+                                )
+                        )
+                )
+                .put(
+                    "required",
+                    JSONArray()
+                        .put("id")
+                        .put("text")
+                )
+                .put(
+                    "additionalProperties",
+                    false
+                )
+
+        return JSONObject()
+            .put(
+                "type",
+                "object"
+            )
+            .put(
+                "properties",
+                JSONObject()
+                    .put(
+                        "page_text",
+                        JSONObject()
+                            .put(
+                                "type",
+                                "string"
+                            )
+                    )
+                    .put(
+                        "translations",
+                        JSONObject()
+                            .put(
+                                "type",
+                                "array"
+                            )
+                            .put(
+                                "minItems",
+                                blocks.size
+                            )
+                            .put(
+                                "maxItems",
+                                blocks.size
+                            )
+                            .put(
+                                "items",
+                                translationItem
+                            )
+                    )
+            )
+            .put(
+                "required",
+                JSONArray()
+                    .put(
+                        "translations"
+                    )
+            )
+            .put(
+                "additionalProperties",
+                false
+            )
+            .toString()
+    }
+
     private fun parseResponse(
-        raw: String
+        raw: String,
+        validIds: Set<Int>
     ): ParsedResult {
         var clean = raw.trim()
         clean = clean
@@ -750,8 +873,12 @@ class LocalContextTranslator(
                                 .trim()
 
                         if (id != Int.MIN_VALUE
+                            && id in validIds
                             && text.isNotEmpty()
                             && !looksLikeMetaCommentary(
+                                text
+                            )
+                            && !looksLikePlaceholder(
                                 text
                             )
                         ) {
@@ -771,6 +898,9 @@ class LocalContextTranslator(
                         .takeIf {
                             it.isNotEmpty()
                                     && !looksLikeMetaCommentary(
+                                it
+                            )
+                                    && !looksLikePlaceholder(
                                 it
                             )
                         }
@@ -796,12 +926,44 @@ class LocalContextTranslator(
                             && !looksLikeMetaCommentary(
                         it
                     )
+                            && !looksLikePlaceholder(
+                        it
+                    )
                 }
                 ?: ""
 
         return ParsedResult(
             translations = emptyMap(),
             pageText = fallback
+        )
+    }
+
+    private fun looksLikePlaceholder(
+        text: String
+    ): Boolean {
+        val compact =
+            text
+                .replace("\n", " ")
+                .trim()
+                .lowercase()
+
+        val placeholders =
+            setOf(
+                "최종 한국어",
+                "최종 번역",
+                "한국어 번역",
+                "번역문",
+                "번역 텍스트",
+                "translated text",
+                "final korean",
+                "korean translation"
+            )
+
+        return compact in placeholders
+                || compact.matches(
+            Regex(
+                """^(최종\s*)?(한국어\s*)?(번역|번역문|번역\s*결과)(입니다|임)?[.!]?$"""
+            )
         )
     }
 
