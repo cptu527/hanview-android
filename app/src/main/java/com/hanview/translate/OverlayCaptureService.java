@@ -58,7 +58,7 @@ public class OverlayCaptureService extends Service {
 
     private static final String CHANNEL_ID = "viewnyang_live_translation";
     private static final int NOTIFICATION_ID = 527;
-    private static final long LIVE_INTERVAL_MS = 420L;
+    private static final long LIVE_INTERVAL_MS = 250L;
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
