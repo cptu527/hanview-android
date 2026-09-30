@@ -978,7 +978,13 @@ public class OverlayCaptureService extends Service {
                         cleanCaptureRequested = !patchManager.hasPatches();
                     }
                     translationPending = false;
-                    if (bubble != null) bubble.setText("한");
+                    if (bubble != null) {
+                        bubble.setText(
+                                usedAi
+                                        ? "문"
+                                        : "한"
+                        );
+                    }
                 });
             }
             @Override public void onError(String message) {
