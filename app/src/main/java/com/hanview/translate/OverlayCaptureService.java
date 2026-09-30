@@ -1021,162 +1021,54 @@ public class OverlayCaptureService extends Service {
     private List<OcrBlock> mergeVerticalColumns(
             List<OcrBlock> source
     ) {
-        List<OcrBlock> horizontal =
-                new ArrayList<>();
-        List<OcrBlock> vertical =
-                new ArrayList<>();
+        // ML Kit's Japanese recognizer already returns each vertical text column
+        // in reading order within that column. Do NOT glue neighboring columns
+        // together here: adjacent manga columns are very often separate sentences
+        // or turns of speech, and concatenating them changes the meaning.
+        List<OcrBlock> out =
+                new ArrayList<>(source);
 
-        for (OcrBlock block : source) {
-            if (block.verticalSource) {
-                vertical.add(block);
-            } else {
-                horizontal.add(block);
-            }
-        }
+        out.sort(
+                (a, b) -> {
+                    boolean av =
+                            a.verticalSource
+                                    || a.bounds.height()
+                                    > a.bounds.width() * 1.8f;
+                    boolean bv =
+                            b.verticalSource
+                                    || b.bounds.height()
+                                    > b.bounds.width() * 1.8f;
 
-        boolean[] used =
-                new boolean[vertical.size()];
+                    if (av && bv) {
+                        int byColumn =
+                                Integer.compare(
+                                        b.bounds.centerX(),
+                                        a.bounds.centerX()
+                                );
 
-        for (int i = 0; i < vertical.size(); i++) {
-            if (used[i]) {
-                continue;
-            }
-
-            List<OcrBlock> group =
-                    new ArrayList<>();
-            group.add(vertical.get(i));
-            used[i] = true;
-
-            boolean expanded;
-
-            do {
-                expanded = false;
-
-                Rect groupBounds =
-                        unionBounds(group);
-
-                for (int j = 0; j < vertical.size(); j++) {
-                    if (used[j]) {
-                        continue;
+                        if (byColumn != 0) {
+                            return byColumn;
+                        }
                     }
 
-                    OcrBlock candidate =
-                            vertical.get(j);
-
-                    float overlap =
-                            verticalOverlapRatio(
-                                    groupBounds,
-                                    candidate.bounds
-                            );
-
-                    int gap =
-                            horizontalGap(
-                                    groupBounds,
-                                    candidate.bounds
-                            );
-
-                    Rect candidateBounds =
-                            new Rect(groupBounds);
-                    candidateBounds.union(
-                            candidate.bounds
-                    );
-
-                    int maxGroupWidth =
-                            Math.min(
-                                    dp(150),
-                                    Math.max(
-                                            dp(92),
-                                            Math.round(
-                                                    captureWidth * 0.34f
-                                            )
-                                    )
-                            );
-
-                    // Do not let adjacent vertical columns chain across the
-                    // whole manga page. Keep each translated paragraph compact.
-                    if (overlap >= 0.68f
-                            && gap <= dp(18)
-                            && group.size() < 5
-                            && candidateBounds.width()
-                            <= maxGroupWidth) {
-                        group.add(candidate);
-                        used[j] = true;
-                        expanded = true;
-                    }
-                }
-            } while (expanded);
-
-            if (group.size() == 1) {
-                horizontal.add(group.get(0));
-                continue;
-            }
-
-            group.sort(
-                    (a, b) ->
+                    int byTop =
                             Integer.compare(
-                                    b.bounds.left,
-                                    a.bounds.left
-                            )
-            );
+                                    a.bounds.top,
+                                    b.bounds.top
+                            );
 
-            StringBuilder combined =
-                    new StringBuilder();
+                    if (byTop != 0) {
+                        return byTop;
+                    }
 
-            float glyphWidth = Float.MAX_VALUE;
-
-            for (OcrBlock block : group) {
-                if (combined.length() > 0
-                        && !endsWithJapanesePunctuation(
-                        combined
-                )) {
-                    // Japanese does not use word spaces. Joining neighboring
-                    // columns directly gives the translator a continuous sentence.
-                }
-
-                combined.append(
-                        block.original
-                                .replace("\n", "")
-                                .replace(" ", "")
-                );
-
-                glyphWidth =
-                        Math.min(
-                                glyphWidth,
-                                block.bounds.width()
-                        );
-            }
-
-            Rect bounds =
-                    unionBounds(group);
-
-            OcrBlock merged =
-                    new OcrBlock(
-                            0,
-                            combined.toString(),
-                            bounds
+                    return Integer.compare(
+                            a.bounds.left,
+                            b.bounds.left
                     );
-
-            merged.verticalSource = true;
-            merged.sourceGlyphWidthPx =
-                    glyphWidth == Float.MAX_VALUE
-                            ? bounds.width()
-                            : glyphWidth;
-
-            horizontal.add(merged);
-        }
-
-        horizontal.sort(
-                Comparator
-                        .comparingInt(
-                                (OcrBlock b) ->
-                                        b.bounds.top
-                        )
-                        .thenComparingInt(
-                                b -> b.bounds.left
-                        )
+                }
         );
 
-        return horizontal;
+        return out;
     }
 
     private boolean endsWithJapanesePunctuation(
