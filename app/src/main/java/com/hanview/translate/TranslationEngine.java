@@ -74,6 +74,10 @@ public class TranslationEngine {
         warmUp("ja");
         warmUp("en");
         warmUp("zh");
+
+        // If the large manga model is installed, begin loading it quietly.
+        // Fast ML Kit translation remains available while this warms up.
+        localContextTranslator.warmUp();
     }
 
     public static void prewarmCommon(Context context) {
@@ -1228,8 +1232,8 @@ public class TranslationEngine {
     }
 
     public void cancelPending() {
-        // On-device ML Kit tasks cannot be cancelled reliably. Generation checks
-        // in OverlayCaptureService prevent stale results from being displayed.
+        // ML Kit tasks cannot be cancelled reliably, but stale LLM refinement can.
+        localContextTranslator.cancelPending();
     }
 
     public void close() {
