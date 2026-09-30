@@ -94,9 +94,18 @@ public class TranslationEngine {
             return;
         }
 
+        boolean chatGptPreferred =
+                chatGptPlanClient.hasPlanAccess();
+
         List<OcrBlock> pending = new ArrayList<>();
         for (OcrBlock block : blocks) {
-            String cached = getCached(block.original);
+            String cached =
+                    getCached(
+                            chatGptPreferred
+                                    ? "ai"
+                                    : "local",
+                            block.original
+                    );
             if (cached != null) {
                 block.translated = cached;
             } else {
@@ -119,7 +128,13 @@ public class TranslationEngine {
                     if (block.translated != null
                             && !block.translated.trim().isEmpty()
                             && !block.translated.equals(block.original)) {
-                        putCached(block.original, block.translated);
+                        putCached(
+                                usedAi
+                                        ? "ai"
+                                        : "local",
+                                block.original,
+                                block.translated
+                        );
                     }
                 }
                 callback.onSuccess(blocks, usedAi);
@@ -131,7 +146,7 @@ public class TranslationEngine {
             }
         };
 
-        if (chatGptPlanClient.hasPlanAccess()) {
+        if (chatGptPreferred) {
             translateWithChatGpt(
                     pending,
                     mergeBack
@@ -572,12 +587,24 @@ public class TranslationEngine {
         return letters > 0 && latin * 2 >= letters;
     }
 
-    private String getCached(String source) {
-        return translationCache.get(normalize(source));
+    private String getCached(
+            String mode,
+            String source
+    ) {
+        return translationCache.get(
+                mode + ":" + normalize(source)
+        );
     }
 
-    private void putCached(String source, String translated) {
-        translationCache.put(normalize(source), translated);
+    private void putCached(
+            String mode,
+            String source,
+            String translated
+    ) {
+        translationCache.put(
+                mode + ":" + normalize(source),
+                translated
+        );
     }
 
     private String normalize(String value) {
