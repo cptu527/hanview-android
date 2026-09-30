@@ -981,7 +981,53 @@ public class OverlayCaptureService extends Service {
         cleanCaptureRequested = false;
         processing = false;
         mainHandler.post(() -> {
-            if (bubble != null && liveEnabled && displayGate.canDisplay(frameGeneration)) bubble.setText("번역…");
+            if (bubble != null && liveEnabled && displayGate.canDisplay(frameGeneration)) {
+                bubble.setText("번역…");
+            }
+
+            mainHandler.postDelayed(() -> {
+                if (!liveEnabled
+                        || !displayGate.isVisible()
+                        || !displayGate.canDisplay(frameGeneration)
+                        || !translationPending) {
+                    return;
+                }
+
+                translationPending = false;
+                translationRetryAfterMs =
+                        SystemClock.uptimeMillis()
+                                + 1200L;
+                cleanCaptureRequested = true;
+
+                if (translationEngine != null) {
+                    translationEngine.cancelPending();
+                }
+
+                if (bubble != null) {
+                    bubble.setText("!");
+                }
+
+                Toast.makeText(
+                        OverlayCaptureService.this,
+                        "번역이 오래 걸려 자동으로 다시 시도합니다.",
+                        Toast.LENGTH_SHORT
+                ).show();
+
+                if (captureHandler != null) {
+                    captureHandler.postDelayed(
+                            () -> {
+                                if (liveEnabled
+                                        && displayGate.isVisible()
+                                        && !processing
+                                        && !captureRequested
+                                        && !translationPending) {
+                                    requestFrame();
+                                }
+                            },
+                            1250L
+                    );
+                }
+            }, 9000L);
         });
         translationEngine.translate(normalized, new TranslationEngine.Callback() {
             @Override public void onSuccess(List<OcrBlock> translated, boolean usedAi) {
