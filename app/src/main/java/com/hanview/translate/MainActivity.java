@@ -264,21 +264,16 @@ public class MainActivity extends Activity {
 
             localModelStatus.setText(
                     modelReady
-                            ? "✓ 실시간 번역 모델 설치됨 (Qwen3 1.7B)\n정확도는 유지하면서 휴대폰 실시간 번역에 맞게 가볍게 동작합니다."
+                            ? "기존 Qwen3 1.7B 모델이 설치되어 있지만 실시간 번역에서는 사용하지 않습니다.\n현재는 ChatGPT 서버 번역을 우선 사용합니다."
                             : (
                             old4BReady
-                                    ? "기존 4B 모델은 휴대폰에서 너무 느려 실시간 번역에 사용하지 않습니다.\n아래에서 새 1.7B 실시간 모델(약 1GB)을 설치해 주세요."
-                                    : "실시간 번역 모델 미설치\n아래에서 1.7B 모델(약 1GB)을 한 번 설치해 주세요."
+                                    ? "기존 4B 로컬 모델이 남아 있지만 실시간 번역에서는 사용하지 않습니다.\n현재는 ChatGPT 서버 번역을 우선 사용합니다."
+                                    : "로컬 LLM 미설치\n현재 실시간 번역은 ChatGPT 서버를 우선 사용하며, 실패 시 가벼운 기기 번역으로 전환합니다."
                     )
             );
 
-            localModelButton.setText(
-                    "실시간 번역 모델 다운로드 (약 1GB)"
-            );
             localModelButton.setVisibility(
-                    modelReady
-                            ? View.GONE
-                            : View.VISIBLE
+                    View.GONE
             );
         }
     }
