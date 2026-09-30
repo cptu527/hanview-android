@@ -1447,40 +1447,27 @@ public class OverlayCaptureService extends Service {
                 }
 
                 translationPending = false;
+                // Do not auto-loop forever on the same page. If inference takes
+                // too long, keep the page idle until the screen changes or the
+                // translator is restarted.
                 translationRetryAfterMs =
-                        SystemClock.uptimeMillis()
-                                + 1200L;
-                cleanCaptureRequested = true;
+                        Long.MAX_VALUE;
+                cleanCaptureRequested = false;
 
                 if (translationEngine != null) {
                     translationEngine.cancelPending();
                 }
 
                 if (bubble != null) {
-                    bubble.setText("!");
+                    bubble.setText("시간초과");
                 }
 
                 Toast.makeText(
                         OverlayCaptureService.this,
-                        "번역이 오래 걸려 자동으로 다시 시도합니다.",
-                        Toast.LENGTH_SHORT
+                        "번역이 35초 안에 끝나지 않았어요. 자동 재시도는 멈췄습니다.",
+                        Toast.LENGTH_LONG
                 ).show();
-
-                if (captureHandler != null) {
-                    captureHandler.postDelayed(
-                            () -> {
-                                if (liveEnabled
-                                        && displayGate.isVisible()
-                                        && !processing
-                                        && !captureRequested
-                                        && !translationPending) {
-                                    requestFrame();
-                                }
-                            },
-                            1250L
-                    );
-                }
-            }, 60000L);
+            }, 35000L);
         });
         translationEngine.translate(normalized, new TranslationEngine.Callback() {
             @Override public void onSuccess(List<OcrBlock> translated, boolean usedAi) {
@@ -2646,8 +2633,8 @@ public class OverlayCaptureService extends Service {
 
         bubbleParams =
                 new WindowManager.LayoutParams(
-                        dp(50),
-                        dp(50),
+                        dp(58),
+                        dp(58),
                         type,
                         WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
                                 | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,

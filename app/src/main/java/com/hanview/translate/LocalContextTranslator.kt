@@ -142,7 +142,7 @@ class LocalContextTranslator(
                     .use { conversation ->
                         conversation.sendMessage(
                             prompt,
-                            maxOutputToken = 520
+                            maxOutputToken = 420
                         ).toString()
                     }
 
@@ -211,6 +211,9 @@ class LocalContextTranslator(
                 return created
             }
 
+            // The block32 1.7B bundle is a GPU-specialized live model.
+            // Silent CPU fallback makes a single page take minutes and looks hung.
+            // Fail fast instead so the UI can show the real GPU/runtime problem.
             val created =
                 try {
                     createEngine(
@@ -218,17 +221,11 @@ class LocalContextTranslator(
                         "gpu"
                     )
                 } catch (gpuError: Throwable) {
-                    try {
-                        createEngine(
-                            Backend.CPU(),
-                            "cpu"
-                        )
-                    } catch (cpuError: Throwable) {
-                        throw IllegalStateException(
-                            "실시간 1.7B 번역 모델 실행 실패 (GPU/CPU 모두 실패)",
-                            cpuError
-                        )
-                    }
+                    activeBackend = "gpu-error"
+                    throw IllegalStateException(
+                        "GPU 번역 엔진 초기화 실패. 앱을 최신 버전으로 업데이트한 뒤 다시 시도해 주세요.",
+                        gpuError
+                    )
                 }
 
             engine = created
