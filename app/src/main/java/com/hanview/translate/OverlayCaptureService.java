@@ -1069,14 +1069,140 @@ public class OverlayCaptureService extends Service {
     private List<OcrBlock> mergeVerticalColumns(
             List<OcrBlock> source
     ) {
-        // ML Kit's Japanese recognizer already returns each vertical text column
-        // in reading order within that column. Do NOT glue neighboring columns
-        // together here: adjacent manga columns are very often separate sentences
-        // or turns of speech, and concatenating them changes the meaning.
-        List<OcrBlock> out =
-                new ArrayList<>(source);
+        List<OcrBlock> horizontal =
+                new ArrayList<>();
+        List<OcrBlock> vertical =
+                new ArrayList<>();
 
-        out.sort(
+        for (OcrBlock block : source) {
+            boolean looksVertical =
+                    block.verticalSource
+                            || block.bounds.height()
+                            > block.bounds.width() * 1.8f;
+
+            if (looksVertical) {
+                block.verticalSource = true;
+                vertical.add(block);
+            } else {
+                horizontal.add(block);
+            }
+        }
+
+        // Japanese manga is read right-to-left across vertical columns.
+        vertical.sort(
+                (a, b) -> {
+                    int byX =
+                            Integer.compare(
+                                    b.bounds.centerX(),
+                                    a.bounds.centerX()
+                            );
+
+                    if (byX != 0) {
+                        return byX;
+                    }
+
+                    return Integer.compare(
+                            a.bounds.top,
+                            b.bounds.top
+                    );
+                }
+        );
+
+        List<OcrBlock> grouped =
+                new ArrayList<>();
+
+        List<OcrBlock> current =
+                new ArrayList<>();
+
+        for (OcrBlock candidate : vertical) {
+            if (current.isEmpty()) {
+                current.add(candidate);
+                continue;
+            }
+
+            OcrBlock previous =
+                    current.get(
+                            current.size() - 1
+                    );
+
+            float overlap =
+                    verticalOverlapRatio(
+                            previous.bounds,
+                            candidate.bounds
+                    );
+
+            int gap =
+                    horizontalGap(
+                            previous.bounds,
+                            candidate.bounds
+                    );
+
+            float averageColumnWidth =
+                    (
+                            previous.bounds.width()
+                                    + candidate.bounds.width()
+                    ) / 2f;
+
+            int adaptiveGap =
+                    Math.max(
+                            dp(3),
+                            Math.min(
+                                    dp(12),
+                                    Math.round(
+                                            averageColumnWidth * 0.80f
+                                    )
+                            )
+                    );
+
+            Rect proposed =
+                    unionBounds(current);
+            proposed.union(
+                    candidate.bounds
+            );
+
+            int maxTextBoxWidth =
+                    Math.min(
+                            dp(150),
+                            Math.max(
+                                    dp(88),
+                                    Math.round(
+                                            captureWidth * 0.30f
+                                    )
+                            )
+                    );
+
+            boolean sameTextBox =
+                    overlap >= 0.58f
+                            && gap <= adaptiveGap
+                            && proposed.width()
+                            <= maxTextBoxWidth
+                            && current.size() < 7;
+
+            if (sameTextBox) {
+                current.add(candidate);
+            } else {
+                grouped.add(
+                        mergeVerticalGroup(
+                                current
+                        )
+                );
+                current =
+                        new ArrayList<>();
+                current.add(candidate);
+            }
+        }
+
+        if (!current.isEmpty()) {
+            grouped.add(
+                    mergeVerticalGroup(
+                            current
+                    )
+            );
+        }
+
+        horizontal.addAll(grouped);
+
+        horizontal.sort(
                 (a, b) -> {
                     boolean av =
                             a.verticalSource
@@ -1088,14 +1214,14 @@ public class OverlayCaptureService extends Service {
                                     > b.bounds.width() * 1.8f;
 
                     if (av && bv) {
-                        int byColumn =
+                        int byX =
                                 Integer.compare(
                                         b.bounds.centerX(),
                                         a.bounds.centerX()
                                 );
 
-                        if (byColumn != 0) {
-                            return byColumn;
+                        if (byX != 0) {
+                            return byX;
                         }
                     }
 
@@ -1116,7 +1242,70 @@ public class OverlayCaptureService extends Service {
                 }
         );
 
-        return out;
+        return horizontal;
+    }
+
+    private OcrBlock mergeVerticalGroup(
+            List<OcrBlock> group
+    ) {
+        if (group.size() == 1) {
+            return group.get(0);
+        }
+
+        group.sort(
+                (a, b) ->
+                        Integer.compare(
+                                b.bounds.centerX(),
+                                a.bounds.centerX()
+                        )
+        );
+
+        StringBuilder combined =
+                new StringBuilder();
+
+        float glyphWidth =
+                Float.MAX_VALUE;
+
+        for (OcrBlock block : group) {
+            String value =
+                    block.original == null
+                            ? ""
+                            : block.original
+                                    .replace("\n", "")
+                                    .replace(" ", "")
+                                    .trim();
+
+            if (!value.isEmpty()) {
+                combined.append(value);
+            }
+
+            glyphWidth =
+                    Math.min(
+                            glyphWidth,
+                            Math.max(
+                                    1,
+                                    block.bounds.width()
+                            )
+                    );
+        }
+
+        Rect bounds =
+                unionBounds(group);
+
+        OcrBlock merged =
+                new OcrBlock(
+                        group.get(0).id,
+                        combined.toString(),
+                        bounds
+                );
+
+        merged.verticalSource = true;
+        merged.sourceGlyphWidthPx =
+                glyphWidth == Float.MAX_VALUE
+                        ? bounds.width()
+                        : glyphWidth;
+
+        return merged;
     }
 
     private boolean endsWithJapanesePunctuation(
