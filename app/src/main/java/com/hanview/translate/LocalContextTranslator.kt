@@ -411,7 +411,7 @@ class LocalContextTranslator(
                         return@Thread
                     }
 
-                    if (part.exists()) part.delete()
+                    var existing = if (part.exists()) part.length() else 0L
 
                     connection = URL(MODEL_URL)
                         .openConnection() as HttpURLConnection
@@ -423,6 +423,14 @@ class LocalContextTranslator(
                         "User-Agent",
                         "ViewNyang/Android"
                     )
+
+                    if (existing > 0L) {
+                        connection.setRequestProperty(
+                            "Range",
+                            "bytes=$existing-"
+                        )
+                    }
+
                     connection.connect()
 
                     val code = connection.responseCode
@@ -432,13 +440,37 @@ class LocalContextTranslator(
                         )
                     }
 
-                    val total = connection.contentLengthLong
+                    val resumed = code == HttpURLConnection.HTTP_PARTIAL
+
+                    if (existing > 0L && !resumed) {
+                        part.delete()
+                        existing = 0L
+                    }
+
+                    val responseLength = connection.contentLengthLong
+                    val total =
+                        if (responseLength > 0L) {
+                            existing + responseLength
+                        } else {
+                            -1L
+                        }
 
                     connection.inputStream.use { input ->
-                        FileOutputStream(part).use { output ->
-                            val buffer = ByteArray(128 * 1024)
-                            var downloaded = 0L
-                            var lastPercent = -1
+                        FileOutputStream(part, resumed && existing > 0L).use { output ->
+                            val buffer = ByteArray(256 * 1024)
+                            var downloaded = existing
+                            var lastPercent =
+                                if (total > 0L) {
+                                    ((downloaded * 100L) / total)
+                                        .toInt()
+                                        .coerceIn(0, 99)
+                                } else {
+                                    -1
+                                }
+
+                            if (lastPercent >= 0) {
+                                callback.onProgress(lastPercent)
+                            }
 
                             while (true) {
                                 val read = input.read(buffer)
@@ -487,7 +519,7 @@ class LocalContextTranslator(
                     callback.onProgress(100)
                     callback.onSuccess()
                 } catch (t: Throwable) {
-                    if (part.exists()) part.delete()
+                    // Keep the partial file so a multi-GB model download can resume.
                     callback.onError(
                         t.message?.takeIf { it.isNotBlank() }
                             ?: "문맥 모델 다운로드에 실패했어요."
