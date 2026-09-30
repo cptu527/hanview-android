@@ -223,11 +223,27 @@ class LocalContextTranslator(
                     }
                 }
 
+                val sourceChars =
+                    snapshot.sumOf {
+                        it.original
+                            ?.length
+                            ?: 0
+                    }
+
+                val outputTokenBudget =
+                    (220
+                            + snapshot.size * 45
+                            + sourceChars)
+                        .coerceIn(
+                            420,
+                            720
+                        )
+
                 val responseText =
                     try {
                         generateOnce(
                             prompt,
-                            420
+                            outputTokenBudget
                         )
                     } catch (firstError: Throwable) {
                         if (!isInputContextTooLong(firstError)) {
@@ -245,7 +261,7 @@ class LocalContextTranslator(
                                 snapshot,
                                 reconstructed
                             ),
-                            360
+                            outputTokenBudget
                         )
                     }
 
