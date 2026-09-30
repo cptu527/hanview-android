@@ -30,6 +30,7 @@ import android.os.SystemClock;
 import android.util.DisplayMetrics;
 import android.view.Gravity;
 import android.view.MotionEvent;
+import android.view.View;
 import android.view.WindowManager;
 import android.widget.TextView;
 import android.widget.Toast;
