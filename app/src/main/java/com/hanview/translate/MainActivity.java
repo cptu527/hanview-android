@@ -116,7 +116,7 @@ public class MainActivity extends Activity {
         TextView liveInfo = infoBox(
                 "무료 자연 번역\n" +
                 "• ChatGPT/API를 사용하지 않아 추가 사용량이나 요금이 없음\n" +
-                "• 일본어 세로 문장을 문단 단위로 묶어 더 자연스럽게 번역\n" +
+                "• 일본어 세로 문장은 오른쪽→왼쪽 실제 읽는 순서대로 처리\n" +
                 "• 번역 뒤 한국어식 어순·구두점·상투적인 직역 표현을 한 번 더 정리\n" +
                 "• 중국어·일본어·영어 등 여러 언어를 기기에서 한국어로 번역\n" +
                 "• 한 번 번역한 페이지는 기기에 저장해 빠르게 다시 표시"
@@ -180,7 +180,7 @@ public class MainActivity extends Activity {
                 "① 위 권한을 한 번 허용\n" +
                 "② 실시간 번역 시작 → 화면 공유 허용\n" +
                 "③ 원하는 앱으로 돌아가 그냥 스크롤\n" +
-                "④ 떠 있는 ‘한’ 버튼을 누르면 즉시 OFF, 다시 누르면 ON"
+                "④ ‘한’은 빠른 번역, ‘문’은 고급 문맥 보정 완료 상태"
         );
         LinearLayout.LayoutParams guideLp = spaced();
         guideLp.topMargin = dp(24);
