@@ -19,6 +19,10 @@ public class OcrBlock {
     public boolean verticalSource = false;
     public float sourceGlyphWidthPx = 0f;
 
+    // True when this block represents a whole-page coherent manga translation
+    // produced by the local context model rather than a single OCR region.
+    public boolean pageTranslation = false;
+
     public OcrBlock(int id, String original, Rect bounds) {
         this.id = id;
         this.original = original;
@@ -33,5 +37,6 @@ public class OcrBlock {
         solidBackground = other.solidBackground;
         verticalSource = other.verticalSource;
         sourceGlyphWidthPx = other.sourceGlyphWidthPx;
+        pageTranslation = other.pageTranslation;
     }
 }
