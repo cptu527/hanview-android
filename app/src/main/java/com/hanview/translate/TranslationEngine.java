@@ -147,7 +147,9 @@ public class TranslationEngine {
 
         boolean useContextModel =
                 localContextTranslator.isReady()
-                        && !blocks.isEmpty();
+                        && shouldUseContextModel(
+                        blocks
+                );
 
         if (!localContextTranslator.isReady()) {
             localContextTranslator.resetContext();
@@ -395,11 +397,33 @@ public class TranslationEngine {
             }
         }
 
-        // Vertical Japanese OCR can lose every kana character and leave only
-        // kanji. If the 4B model is installed, route real CJK text to it rather
-        // than guessing "Chinese" and falling into ML Kit.
-        return meaningfulChars >= 2
-                && (kana >= 1 || han >= 2);
+        boolean looksJapanese =
+                kana >= 1
+                        || han >= 2;
+
+        if (!looksJapanese) {
+            return false;
+        }
+
+        // Short labels, title cards and one-line captions do not benefit from
+        // spinning up the 1.7B context model. ML Kit handles them immediately.
+        // Reserve the heavier model for pages where multiple lines/bubbles or
+        // enough text make speaker/context reconstruction worthwhile.
+        if (meaningfulChars < 16) {
+            return false;
+        }
+
+        int nonEmptyBlocks = 0;
+
+        for (OcrBlock block : blocks) {
+            if (block.original != null
+                    && !block.original.trim().isEmpty()) {
+                nonEmptyBlocks++;
+            }
+        }
+
+        return meaningfulChars >= 28
+                || nonEmptyBlocks >= 2;
     }
 
     private void startContextRefinement(
@@ -1560,6 +1584,11 @@ public class TranslationEngine {
         requestSequence.incrementAndGet();
         // ML Kit tasks cannot be cancelled reliably, but stale LLM refinement can.
         localContextTranslator.cancelPending();
+    }
+
+    public void abortContextModel() {
+        requestSequence.incrementAndGet();
+        localContextTranslator.abortAndReset();
     }
 
     public void close() {
