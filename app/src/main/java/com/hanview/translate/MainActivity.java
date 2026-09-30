@@ -246,7 +246,7 @@ public class MainActivity extends Activity {
 
             localModelStatus.setText(
                     modelReady
-                            ? "✓ 고급 문맥 모델 설치됨\n화면 전체를 함께 보고 자연스러운 한국어 번역을 우선 사용합니다."
+                            ? "✓ 4B 고급 문맥 모델 설치됨\n빠른 번역을 먼저 띄운 뒤 일본어 만화는 뒤에서 문맥·말투를 깊게 보정합니다."
                             : "고급 문맥 모델 미설치\n현재는 가벼운 기기 번역을 사용합니다."
             );
 
