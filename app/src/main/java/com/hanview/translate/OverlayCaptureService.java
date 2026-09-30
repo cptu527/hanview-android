@@ -985,13 +985,30 @@ public class OverlayCaptureService extends Service {
                 mainHandler.post(() -> {
                     if (!liveEnabled || !displayGate.isVisible() || !displayGate.canDisplay(frameGeneration)) return;
                     translationPending = false;
-                    translationRetryAfterMs = SystemClock.uptimeMillis() + 15000L;
+                    long now = SystemClock.uptimeMillis();
+                    translationRetryAfterMs = now + 2500L;
                     cleanCaptureRequested = false;
                     if (bubble != null) bubble.setText("!");
-                    long now = SystemClock.uptimeMillis();
+
                     if (now - lastErrorToastMs >= 15000L) {
                         lastErrorToastMs = now;
                         Toast.makeText(OverlayCaptureService.this, message, Toast.LENGTH_LONG).show();
+                    }
+
+                    // A temporary ChatGPT/network error must not leave live translation
+                    // looking dead. Keep the projection/service alive and automatically
+                    // request a fresh clean frame after a short cooldown.
+                    if (captureHandler != null) {
+                        captureHandler.postDelayed(() -> {
+                            if (!liveEnabled
+                                    || !displayGate.isVisible()
+                                    || !displayGate.canDisplay(frameGeneration)
+                                    || translationPending) {
+                                return;
+                            }
+                            cleanCaptureRequested = true;
+                            requestFrame();
+                        }, 2600L);
                     }
                 });
             }
