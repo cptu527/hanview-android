@@ -902,7 +902,10 @@ public class OverlayCaptureService extends Service {
                         return;
                     }
 
-                    if (containsKana(candidates)) {
+                    if (containsKana(candidates)
+                            && !shouldRunRotatedJapanesePass(
+                            candidates
+                    )) {
                         finishAndRecycle(
                                 candidates,
                                 bitmap,
@@ -911,6 +914,9 @@ public class OverlayCaptureService extends Service {
                         return;
                     }
 
+                    // Vertical manga gets a second OCR opinion even when the
+                    // first pass found some kana. Partial vertical OCR can look
+                    // plausible while changing the entire sentence.
                     runRotatedJapanesePass(
                             bitmap,
                             candidates,
@@ -1226,6 +1232,50 @@ public class OverlayCaptureService extends Service {
         return false;
     }
 
+    private boolean shouldRunRotatedJapanesePass(
+            List<OcrBlock> blocks
+    ) {
+        int vertical = 0;
+        int kana = 0;
+        int japaneseChars = 0;
+
+        for (OcrBlock block : blocks) {
+            if (block.verticalSource
+                    || block.bounds.height()
+                    > block.bounds.width() * 1.45f) {
+                vertical++;
+            }
+
+            String value =
+                    block.original;
+            if (value == null) {
+                continue;
+            }
+
+            for (int i = 0;
+                 i < value.length();
+                 i++) {
+                char c =
+                        value.charAt(i);
+
+                if (c >= '\u3040'
+                        && c <= '\u30FF') {
+                    kana++;
+                    japaneseChars++;
+                } else if ((c >= '\u3400'
+                        && c <= '\u4DBF')
+                        || (c >= '\u4E00'
+                        && c <= '\u9FFF')) {
+                    japaneseChars++;
+                }
+            }
+        }
+
+        return vertical > 0
+                || kana < 10
+                || japaneseChars < 24;
+    }
+
     private boolean containsLatinWithoutHan(
             List<OcrBlock> blocks
     ) {
@@ -1430,7 +1480,7 @@ public class OverlayCaptureService extends Service {
                             1250L
                     );
                 }
-            }, 30000L);
+            }, 120000L);
         });
         translationEngine.translate(normalized, new TranslationEngine.Callback() {
             @Override public void onSuccess(List<OcrBlock> translated, boolean usedAi) {

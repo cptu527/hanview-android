@@ -261,7 +261,7 @@ public class MainActivity extends Activity {
 
             localModelStatus.setText(
                     modelReady
-                            ? "✓ 4B 고급 문맥 모델 설치됨\n빠른 번역을 먼저 띄운 뒤 일본어 만화는 뒤에서 문맥·말투를 깊게 보정합니다."
+                            ? "✓ 4B 정밀 번역 모델 설치됨\n일본어 만화는 초벌 자막을 띄우지 않고 OCR 교정 → 문맥 번역 2단계를 끝낸 뒤 최종 번역만 표시합니다. 시간이 더 걸릴 수 있어요."
                             : "고급 문맥 모델 미설치\n현재는 가벼운 기기 번역을 사용합니다."
             );
 

@@ -103,20 +103,57 @@ class LocalContextTranslator(
                 if (closed.get()) return@launch
 
                 val activeEngine = ensureEngine()
-                val prompt = buildPrompt(snapshot)
+
+                // Accuracy mode: reconstruct OCR first, then translate in a
+                // separate model pass. This intentionally trades speed for quality.
+                val reconstructionInstruction = Contents.of(
+                    "/no_think\n" +
+                            "너는 일본어 만화 OCR 교정 전문가다. 번역하지 마라. " +
+                            "세로쓰기 OCR은 글자 누락, 비슷한 한자 오인식, 열 분절이 있을 수 있다. " +
+                            "items의 좌표와 읽기 순서, previous_page_context를 참고하되 화면에 근거 없는 문장을 만들지 마라. " +
+                            "각 id를 유지하고 일본어 원문만 복원한다. 확실하지 않은 글자는 억지로 다른 단어로 바꾸지 않는다. " +
+                            "출력은 JSON 하나만 반환한다: {\"items\":[{\"id\":0,\"source_ja\":\"교정된 일본어\"}]}."
+                )
+
+                val reconstructionConfig = ConversationConfig(
+                    systemInstruction = reconstructionInstruction
+                )
+
+                val reconstructedRaw = activeEngine
+                    .createConversation(reconstructionConfig)
+                    .use { conversation ->
+                        conversation.sendMessage(
+                            buildReconstructionPrompt(snapshot),
+                            maxOutputToken = 720
+                        ).toString()
+                    }
+
+                if (sequence != requestSequence.get()) {
+                    return@launch
+                }
+
+                val reconstructed =
+                    parseReconstructedSources(
+                        reconstructedRaw,
+                        snapshot
+                    )
+
+                val prompt =
+                    buildPrompt(
+                        snapshot,
+                        reconstructed
+                    )
 
                 val systemInstruction = Contents.of(
                     "/no_think\n" +
-                            "너는 일본어 만화·게임 대사를 한국어로 현지화하는 전문 번역가다. " +
-                            "입력 items는 OCR 결과이며 source_ja가 유일한 원문이다. OCR에는 글자 누락·오인식·세로쓰기 분절이 있을 수 있으므로 " +
-                            "장면 전체와 인접 항목, box 좌표, previous_page_context를 함께 보고 문장을 복원한다. " +
-                            "세로쓰기는 같은 영역 안에서 위에서 아래, 열은 오른쪽에서 왼쪽으로 읽되 서로 다른 말풍선·패널을 억지로 합치지 않는다. " +
-                            "생략된 주어와 목적어, 화자 관계, 호칭, 존댓말/반말, 감정과 말투를 앞뒤 문맥에 맞춰 일관되게 유지한다. " +
-                            "원문 의미와 수위, 욕설, 은어를 임의로 순화·추가·삭제하지 않는다. 일본어 어순을 베끼지 말고 실제 한국 만화 대사처럼 자연스럽게 쓴다. " +
-                            "각 입력 id를 정확히 한 번씩 translations에 반환하고, 같은 번역을 여러 id에 반복하지 않는다. " +
-                            "설명·해설·번역 노트·메타 발언은 금지한다. 출력은 JSON 하나만 반환한다. " +
-                            "형식은 {\"page_text\":\"\",\"translations\":[{\"id\":0,\"text\":\"번역\"}]}. " +
-                            "page_text는 호환용이므로 원칙적으로 빈 문자열로 두고 translations를 완성한다."
+                            "너는 일본어 만화·게임을 한국어로 현지화하는 전문 번역가다. " +
+                            "source_ja는 앞 단계에서 교정된 일본어이며 이것만 원문으로 삼아라. " +
+                            "페이지 전체를 먼저 읽고 화자, 대상, 관계, 호칭, 존댓말/반말, 감정과 앞뒤 논리를 파악한 뒤 번역한다. " +
+                            "문장별 사전 치환처럼 번역하지 말고 실제 한국 만화 대사처럼 자연스럽게 써라. " +
+                            "원문의 의미, 비난 강도, 욕설, 성적 표현, 은어는 임의로 순화·과장·삭제하지 않는다. " +
+                            "모르는 내용을 추측해서 추가하지 않는다. 각 id를 정확히 한 번씩 반환하고 중복하지 않는다. " +
+                            "설명·해설·번역 노트·메타 발언은 금지한다. " +
+                            "출력은 JSON 하나만 반환한다: {\"page_text\":\"\",\"translations\":[{\"id\":0,\"text\":\"최종 한국어\"}]}."
                 )
 
                 val config = ConversationConfig(
@@ -128,7 +165,7 @@ class LocalContextTranslator(
                     .use { conversation ->
                         conversation.sendMessage(
                             prompt,
-                            maxOutputToken = 900
+                            maxOutputToken = 1100
                         ).toString()
                     }
 
@@ -146,6 +183,7 @@ class LocalContextTranslator(
                     previousPageContext =
                         buildPreviousContext(
                             snapshot,
+                            reconstructed,
                             parsed.translations,
                             parsed.pageText
                         )
@@ -221,8 +259,148 @@ class LocalContextTranslator(
         }
     }
 
-    private fun buildPrompt(
+    private fun buildReconstructionPrompt(
         blocks: List<OcrBlock>
+    ): String {
+        val items = JSONArray()
+
+        blocks.forEach { block ->
+            val box = JSONArray()
+                .put(block.bounds.left)
+                .put(block.bounds.top)
+                .put(block.bounds.right)
+                .put(block.bounds.bottom)
+
+            items.put(
+                JSONObject()
+                    .put("id", block.id)
+                    .put("vertical", block.verticalSource)
+                    .put("box", box)
+                    .put(
+                        "source_ja",
+                        block.original
+                            .replace("\\n", "")
+                            .trim()
+                    )
+            )
+        }
+
+        val root = JSONObject()
+            .put(
+                "task",
+                "Reconstruct the Japanese OCR only. Do not translate. Keep each id. Use coordinates for vertical reading order and obvious OCR errors, but never invent unsupported dialogue."
+            )
+            .put("items", items)
+
+        val previous =
+            previousPageContext.trim()
+
+        if (previous.isNotEmpty()) {
+            root.put(
+                "previous_page_context",
+                previous.takeLast(1400)
+            )
+        }
+
+        return root.toString()
+    }
+
+    private fun parseReconstructedSources(
+        raw: String,
+        blocks: List<OcrBlock>
+    ): Map<Int, String> {
+        val fallback =
+            LinkedHashMap<Int, String>()
+
+        blocks.forEach {
+            fallback[it.id] =
+                it.original
+                    .replace("\\n", "")
+                    .trim()
+        }
+
+        var clean =
+            raw.trim()
+                .removePrefix("```json")
+                .removePrefix("```")
+                .removeSuffix("```")
+                .trim()
+
+        val start =
+            clean.indexOf('{')
+        val end =
+            clean.lastIndexOf('}')
+
+        if (start < 0 || end <= start) {
+            return fallback
+        }
+
+        return try {
+            clean =
+                clean.substring(
+                    start,
+                    end + 1
+                )
+
+            val root =
+                JSONObject(clean)
+            val list =
+                root.optJSONArray(
+                    "items"
+                )
+                ?: return fallback
+
+            val parsed =
+                LinkedHashMap<Int, String>()
+
+            for (i in 0 until list.length()) {
+                val item =
+                    list.optJSONObject(i)
+                        ?: continue
+                val id =
+                    item.optInt(
+                        "id",
+                        Int.MIN_VALUE
+                    )
+                val text =
+                    item.optString(
+                        "source_ja",
+                        ""
+                    )
+                        .replace("\\n", "")
+                        .trim()
+
+                if (id != Int.MIN_VALUE
+                    && text.isNotEmpty()
+                ) {
+                    parsed[id] =
+                        text
+                }
+            }
+
+            val minimum =
+                kotlin.math.max(
+                    1,
+                    kotlin.math.ceil(
+                        blocks.size * 0.70
+                    ).toInt()
+                )
+
+            if (parsed.size < minimum) {
+                fallback
+            } else {
+                fallback.apply {
+                    putAll(parsed)
+                }
+            }
+        } catch (_: Throwable) {
+            fallback
+        }
+    }
+
+    private fun buildPrompt(
+        blocks: List<OcrBlock>,
+        reconstructed: Map<Int, String>
     ): String {
         val ordered = blocks.sortedWith { a, b ->
             val av = a.verticalSource ||
@@ -296,9 +474,11 @@ class LocalContextTranslator(
                     .put("box", box)
                     .put(
                         "source_ja",
-                        block.original
-                            .replace("\\n", "")
-                            .trim()
+                        reconstructed[block.id]
+                            ?.takeIf { it.isNotBlank() }
+                            ?: block.original
+                                .replace("\\n", "")
+                                .trim()
                     )
             )
         }
@@ -325,6 +505,7 @@ class LocalContextTranslator(
 
     private fun buildPreviousContext(
         blocks: List<OcrBlock>,
+        reconstructed: Map<Int, String>,
         translations: Map<Int, String>,
         pageText: String
     ): String {
@@ -351,9 +532,11 @@ class LocalContextTranslator(
 
             current.append("JA: ")
                 .append(
-                    block.original
-                        .replace("\n", " ")
-                        .trim()
+                    reconstructed[block.id]
+                        ?.takeIf { it.isNotBlank() }
+                        ?: block.original
+                            .replace("\n", " ")
+                            .trim()
                 )
                 .append("\nKO: ")
                 .append(ko)

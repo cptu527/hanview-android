@@ -152,7 +152,7 @@ public class TranslationEngine {
         }
 
         String refinedKey =
-                "llm-v9:"
+                "llm-v10:"
                         + baseKey;
 
         if (useContextModel) {
@@ -194,8 +194,25 @@ public class TranslationEngine {
             }
         }
 
+        // Japanese manga with the 4B model installed is quality-first.
+        // Do not paint ML Kit's rough sentence-by-sentence result first.
+        // Wait for one context-aware result even when it takes longer.
+        if (useContextModel) {
+            AtomicBoolean deepDelivered =
+                    new AtomicBoolean(false);
+
+            startContextRefinement(
+                    copyBlocks(blocks),
+                    refinedKey,
+                    sequence,
+                    deepDelivered,
+                    callback
+            );
+            return;
+        }
+
         String fastKey =
-                "fast-v9:"
+                "fast-v10:"
                         + baseKey;
 
         List<String> fastCached =
