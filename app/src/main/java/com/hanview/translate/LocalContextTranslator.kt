@@ -186,7 +186,7 @@ class LocalContextTranslator(
                     EngineConfig(
                         modelPath = file.absolutePath,
                         backend = backend,
-                        maxNumTokens = 3072,
+                        maxNumTokens = 2048,
                         cacheDir = appContext.cacheDir.absolutePath
                     )
                 )

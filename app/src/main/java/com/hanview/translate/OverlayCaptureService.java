@@ -12,6 +12,7 @@ import android.content.IntentFilter;
 import android.content.pm.ServiceInfo;
 import android.graphics.Bitmap;
 import android.graphics.Color;
+import android.graphics.Matrix;
 import android.graphics.PixelFormat;
 import android.graphics.Rect;
 import android.graphics.drawable.GradientDrawable;
@@ -49,6 +50,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public class OverlayCaptureService extends Service {
@@ -866,8 +868,10 @@ public class OverlayCaptureService extends Service {
         List<OcrBlock> candidates =
                 new ArrayList<>();
 
-        // Manga path first. The Japanese recognizer also reads Latin, so many
-        // pages finish here without loading another OCR model.
+        // First try the screen as-is. If vertical Japanese is not confidently
+        // recognized, retry the same frame rotated 90 degrees counter-clockwise.
+        // That turns top-to-bottom manga columns into left-to-right text for OCR
+        // while remaining completely on-device.
         recognizers.get(0)
                 .process(input)
                 .addOnSuccessListener(text ->
@@ -884,9 +888,6 @@ public class OverlayCaptureService extends Service {
                         return;
                     }
 
-                    // Only a real Japanese signal (kana) may finish after the
-                    // Japanese recognizer. Latin UI text alone must NOT short-circuit
-                    // the Chinese pass, otherwise Taobao pages can lose all Han text.
                     if (containsKana(candidates)) {
                         finishAndRecycle(
                                 candidates,
@@ -896,13 +897,215 @@ public class OverlayCaptureService extends Service {
                         return;
                     }
 
-                    runChinesePass(
-                            input,
+                    runRotatedJapanesePass(
                             bitmap,
                             candidates,
                             frameGeneration
                     );
                 });
+    }
+
+    private void runRotatedJapanesePass(
+            Bitmap bitmap,
+            List<OcrBlock> candidates,
+            int frameGeneration
+    ) {
+        final Bitmap rotated;
+
+        try {
+            Matrix matrix =
+                    new Matrix();
+            matrix.postRotate(-90f);
+
+            rotated =
+                    Bitmap.createBitmap(
+                            bitmap,
+                            0,
+                            0,
+                            bitmap.getWidth(),
+                            bitmap.getHeight(),
+                            matrix,
+                            true
+                    );
+        } catch (Throwable rotateError) {
+            runChinesePass(
+                    InputImage.fromBitmap(
+                            bitmap,
+                            0
+                    ),
+                    bitmap,
+                    candidates,
+                    frameGeneration
+            );
+            return;
+        }
+
+        AtomicBoolean foundJapanese =
+                new AtomicBoolean(false);
+
+        recognizers.get(0)
+                .process(
+                        InputImage.fromBitmap(
+                                rotated,
+                                0
+                        )
+                )
+                .addOnSuccessListener(text -> {
+                    List<OcrBlock> rotatedBlocks =
+                            extractRotatedJapaneseLines(
+                                    text,
+                                    bitmap.getWidth(),
+                                    bitmap.getHeight()
+                            );
+
+                    if (!rotatedBlocks.isEmpty()) {
+                        foundJapanese.set(true);
+                        mergeCandidates(
+                                candidates,
+                                rotatedBlocks
+                        );
+                    }
+                })
+                .addOnCompleteListener(task -> {
+                    safeRecycle(rotated);
+
+                    if (!isCurrentGeneration(
+                            frameGeneration
+                    )) {
+                        safeRecycle(bitmap);
+                        return;
+                    }
+
+                    if (foundJapanese.get()
+                            || containsKana(candidates)) {
+                        finishAndRecycle(
+                                candidates,
+                                bitmap,
+                                frameGeneration
+                        );
+                        return;
+                    }
+
+                    runChinesePass(
+                            InputImage.fromBitmap(
+                                    bitmap,
+                                    0
+                            ),
+                            bitmap,
+                            candidates,
+                            frameGeneration
+                    );
+                });
+    }
+
+    private List<OcrBlock> extractRotatedJapaneseLines(
+            Text result,
+            int originalWidth,
+            int originalHeight
+    ) {
+        List<OcrBlock> out =
+                new ArrayList<>();
+        int id = 10000;
+
+        for (Text.TextBlock block :
+                result.getTextBlocks()) {
+            for (Text.Line line :
+                    block.getLines()) {
+                String value =
+                        normalizeRecognizedText(
+                                line.getText(),
+                                true
+                        );
+
+                Rect rotatedRect =
+                        line.getBoundingBox();
+
+                if (rotatedRect == null
+                        || value.isEmpty()
+                        || !hasJapaneseOrHan(value)
+                        || isKoreanDominant(value)) {
+                    continue;
+                }
+
+                int left =
+                        Math.max(
+                                0,
+                                Math.min(
+                                        originalWidth,
+                                        originalWidth
+                                                - rotatedRect.bottom
+                                )
+                        );
+                int right =
+                        Math.max(
+                                0,
+                                Math.min(
+                                        originalWidth,
+                                        originalWidth
+                                                - rotatedRect.top
+                                )
+                        );
+                int top =
+                        Math.max(
+                                0,
+                                Math.min(
+                                        originalHeight,
+                                        rotatedRect.left
+                                )
+                        );
+                int bottom =
+                        Math.max(
+                                0,
+                                Math.min(
+                                        originalHeight,
+                                        rotatedRect.right
+                                )
+                        );
+
+                if (right <= left
+                        || bottom <= top) {
+                    continue;
+                }
+
+                Rect mapped =
+                        new Rect(
+                                left,
+                                top,
+                                right,
+                                bottom
+                        );
+
+                if (isLikelyBrowserOrSystemUi(
+                        value,
+                        mapped
+                )) {
+                    continue;
+                }
+
+                OcrBlock recognized =
+                        new OcrBlock(
+                                id++,
+                                value,
+                                mapped
+                        );
+
+                recognized.verticalSource =
+                        true;
+                recognized.sourceGlyphWidthPx =
+                        Math.max(
+                                1,
+                                mapped.width()
+                        );
+
+                out.add(recognized);
+
+                if (out.size() >= 80) {
+                    return out;
+                }
+            }
+        }
+
+        return out;
     }
 
     private void runChinesePass(
@@ -1213,7 +1416,7 @@ public class OverlayCaptureService extends Service {
                             1250L
                     );
                 }
-            }, 9000L);
+            }, 30000L);
         });
         translationEngine.translate(normalized, new TranslationEngine.Callback() {
             @Override public void onSuccess(List<OcrBlock> translated, boolean usedAi) {
