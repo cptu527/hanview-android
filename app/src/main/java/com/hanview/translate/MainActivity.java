@@ -150,7 +150,7 @@ public class MainActivity extends Activity {
         root.addView(localModelStatus, spaced());
 
         localModelButton =
-                button("고품질 문맥 모델 다운로드 (약 1GB)");
+                button("실시간 번역 모델 다운로드 (약 1GB)");
         localModelButton.setOnClickListener(v ->
                 downloadLocalContextModel()
         );
@@ -258,13 +258,23 @@ public class MainActivity extends Activity {
             boolean modelReady =
                     LocalContextTranslator
                             .isModelReady(this);
+            boolean old4BReady =
+                    LocalContextTranslator
+                            .hasOld4BModel(this);
 
             localModelStatus.setText(
                     modelReady
-                            ? "✓ 4B 정밀 번역 모델 설치됨\n일본어 만화는 초벌 자막을 띄우지 않고 OCR 교정 → 문맥 번역 2단계를 끝낸 뒤 최종 번역만 표시합니다. 시간이 더 걸릴 수 있어요."
-                            : "고급 문맥 모델 미설치\n현재는 가벼운 기기 번역을 사용합니다."
+                            ? "✓ 실시간 번역 모델 설치됨 (Qwen3 1.7B)\n정확도는 유지하면서 휴대폰 실시간 번역에 맞게 가볍게 동작합니다."
+                            : (
+                            old4BReady
+                                    ? "기존 4B 모델은 휴대폰에서 너무 느려 실시간 번역에 사용하지 않습니다.\n아래에서 새 1.7B 실시간 모델(약 1GB)을 설치해 주세요."
+                                    : "실시간 번역 모델 미설치\n아래에서 1.7B 모델(약 1GB)을 한 번 설치해 주세요."
+                    )
             );
 
+            localModelButton.setText(
+                    "실시간 번역 모델 다운로드 (약 1GB)"
+            );
             localModelButton.setVisibility(
                     modelReady
                             ? View.GONE
@@ -289,7 +299,7 @@ public class MainActivity extends Activity {
 
         if (localModelStatus != null) {
             localModelStatus.setText(
-                    "Qwen3.5 4B 문맥 모델 다운로드를 시작합니다. 약 2.6GB이며 Wi-Fi와 6GB 이상의 여유공간을 권장해요."
+                    "Qwen3 1.7B 실시간 번역 모델 다운로드를 시작합니다. 약 1GB이며 Wi-Fi와 2GB 이상의 여유공간을 권장해요."
             );
         }
 
@@ -301,7 +311,7 @@ public class MainActivity extends Activity {
                         runOnUiThread(() -> {
                             if (localModelStatus != null) {
                                 localModelStatus.setText(
-                                        "고급 문맥 모델 다운로드 중... "
+                                        "실시간 번역 모델 다운로드 중... "
                                                 + percent
                                                 + "%"
                                 );
@@ -323,14 +333,14 @@ public class MainActivity extends Activity {
 
                             Toast.makeText(
                                     MainActivity.this,
-                                    "고급 문맥 번역 모델 설치 완료!",
+                                    "실시간 번역 모델 설치 완료!",
                                     Toast.LENGTH_LONG
                             ).show();
 
                             if (localModelButton != null) {
                                 localModelButton.setEnabled(true);
                                 localModelButton.setText(
-                                        "고품질 문맥 모델 다운로드 (약 1GB)"
+                                        "실시간 번역 모델 다운로드 (약 1GB)"
                                 );
                             }
 

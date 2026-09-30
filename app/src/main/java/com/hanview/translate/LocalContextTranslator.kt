@@ -76,7 +76,7 @@ class LocalContextTranslator(
         callback: Callback
     ) {
         if (!isReady()) {
-            callback.onError("로컬 문맥 모델이 아직 설치되지 않았어요.")
+            callback.onError("실시간 1.7B 번역 모델이 아직 설치되지 않았어요.")
             return
         }
 
@@ -142,7 +142,7 @@ class LocalContextTranslator(
                     .use { conversation ->
                         conversation.sendMessage(
                             prompt,
-                            maxOutputToken = 1000
+                            maxOutputToken = 520
                         ).toString()
                     }
 
@@ -155,7 +155,7 @@ class LocalContextTranslator(
                 if (parsed.translations.isEmpty()
                     && parsed.pageText.isBlank()
                 ) {
-                    callback.onError("로컬 문맥 모델의 번역 결과를 읽지 못했어요.")
+                    callback.onError("실시간 1.7B 모델의 번역 결과를 읽지 못했어요.")
                 } else {
                     previousPageContext =
                         buildPreviousContext(
@@ -176,7 +176,7 @@ class LocalContextTranslator(
 
                 callback.onError(
                     t.message?.takeIf { it.isNotBlank() }
-                        ?: "로컬 문맥 번역 중 오류가 발생했어요."
+                        ?: "실시간 1.7B 번역 중 오류가 발생했어요."
                 )
             }
         }
@@ -190,7 +190,7 @@ class LocalContextTranslator(
 
             val file = modelFile(appContext)
             if (!file.exists() || file.length() < MIN_MODEL_BYTES) {
-                throw IllegalStateException("로컬 문맥 모델 파일이 없어요.")
+                throw IllegalStateException("실시간 1.7B 번역 모델 파일이 없어요.")
             }
 
             fun createEngine(
@@ -201,7 +201,7 @@ class LocalContextTranslator(
                     EngineConfig(
                         modelPath = file.absolutePath,
                         backend = backend,
-                        maxNumTokens = 2048,
+                        maxNumTokens = 1536,
                         cacheDir = appContext.cacheDir.absolutePath
                     )
                 )
@@ -225,7 +225,7 @@ class LocalContextTranslator(
                         )
                     } catch (cpuError: Throwable) {
                         throw IllegalStateException(
-                            "로컬 문맥 모델 실행 실패 (GPU/CPU 모두 실패)",
+                            "실시간 1.7B 번역 모델 실행 실패 (GPU/CPU 모두 실패)",
                             cpuError
                         )
                     }
@@ -473,7 +473,7 @@ class LocalContextTranslator(
         if (previous.isNotEmpty()) {
             root.put(
                 "previous_page_context",
-                previous.takeLast(2200)
+                previous.takeLast(900)
             )
         }
 
@@ -542,7 +542,7 @@ class LocalContextTranslator(
             }
                 .trim()
 
-        return combined.takeLast(2600)
+        return combined.takeLast(1400)
     }
 
     private data class ParsedResult(
@@ -694,15 +694,18 @@ class LocalContextTranslator(
     companion object {
         private const val MODEL_DIR = "local_llm"
         private const val MODEL_NAME =
-            "Qwen3.5-4B_mixed_int4.litertlm"
+            "Qwen3-1.7B_dynamic_wi4b32_afp32.litertlm"
         private const val MODEL_URL =
-            "https://huggingface.co/litert-community/Qwen3.5-4B/resolve/main/" +
+            "https://huggingface.co/litert-community/Qwen3-1.7B/resolve/main/" +
                     MODEL_NAME + "?download=true"
+        private const val OLD_4B_MODEL_NAME =
+            "Qwen3.5-4B_mixed_int4.litertlm"
         private val LEGACY_MODEL_NAMES = arrayOf(
-            "Qwen3-1.7B_dynamic_wi4b32_afp32.litertlm",
+            OLD_4B_MODEL_NAME,
             "qwen3_0.6b_nothink_q4_block32_ekv1280.litertlm"
         )
-        private const val MIN_MODEL_BYTES = 2_300_000_000L
+        private const val MIN_MODEL_BYTES = 900_000_000L
+        private const val OLD_4B_MIN_BYTES = 2_300_000_000L
 
         @JvmStatic
         fun modelFile(context: Context): File {
@@ -719,6 +722,20 @@ class LocalContextTranslator(
             val file = modelFile(context)
             return file.exists()
                     && file.length() >= MIN_MODEL_BYTES
+        }
+
+        @JvmStatic
+        fun hasOld4BModel(context: Context): Boolean {
+            val dir = File(
+                context.applicationContext.filesDir,
+                MODEL_DIR
+            )
+            val file = File(
+                dir,
+                OLD_4B_MODEL_NAME
+            )
+            return file.exists()
+                    && file.length() >= OLD_4B_MIN_BYTES
         }
 
         @JvmStatic

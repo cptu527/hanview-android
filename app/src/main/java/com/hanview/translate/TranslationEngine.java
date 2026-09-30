@@ -154,7 +154,7 @@ public class TranslationEngine {
         }
 
         String refinedKey =
-                "llm-v13:"
+                "llm-v14:"
                         + baseKey;
 
         if (useContextModel) {
@@ -214,7 +214,7 @@ public class TranslationEngine {
         }
 
         String fastKey =
-                "fast-v13:"
+                "fast-v14:"
                         + baseKey;
 
         List<String> fastCached =
@@ -504,7 +504,7 @@ public class TranslationEngine {
 
                         if (!deepDelivered.get()) {
                             callback.onError(
-                                    "4B 정밀 번역 실행 실패: "
+                                    "실시간 번역 모델 실행 실패: "
                                             + message
                             );
                         }
@@ -886,7 +886,7 @@ public class TranslationEngine {
                                 if (hasCjkText(allBlocks)
                                         && !localContextTranslator.isReady()) {
                                     callback.onError(
-                                            "4B 정밀 번역 모델이 설치되어 있지 않거나 모델 파일을 확인하지 못했어요. 뷰냥 앱을 열어 '4B 정밀 번역 모델 설치됨' 표시를 확인해 주세요."
+                                            "실시간 1.7B 번역 모델이 설치되어 있지 않아요. 뷰냥 앱을 열어 약 1GB 모델을 한 번 설치해 주세요."
                                     );
                                 } else {
                                     callback.onError(
