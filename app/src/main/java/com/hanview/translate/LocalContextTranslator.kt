@@ -798,7 +798,7 @@ class LocalContextTranslator(
                             )
                             .put(
                                 "minItems",
-                                blocks.size
+                                1
                             )
                             .put(
                                 "maxItems",
