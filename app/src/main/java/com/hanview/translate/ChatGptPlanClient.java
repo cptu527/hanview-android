@@ -723,6 +723,21 @@ public class ChatGptPlanClient {
                 true
         );
 
+        JSONObject reasoning =
+                new JSONObject();
+        reasoning.put(
+                "effort",
+                "none"
+        );
+        root.put(
+                "reasoning",
+                reasoning
+        );
+        root.put(
+                "max_output_tokens",
+                1800
+        );
+
         return root;
     }
 
@@ -1054,6 +1069,7 @@ public class ChatGptPlanClient {
         }
 
         String chosen = "";
+        String firstVisible = "";
 
         for (int i = 0;
              i < models.length();
@@ -1086,10 +1102,25 @@ public class ChatGptPlanClient {
                             )
                     );
 
-            if (!slug.isEmpty()) {
+            if (slug.isEmpty()) {
+                continue;
+            }
+
+            if (firstVisible.isEmpty()) {
+                firstVisible = slug;
+            }
+
+            String lower =
+                    slug.toLowerCase();
+
+            if (lower.contains("luna")) {
                 chosen = slug;
                 break;
             }
+        }
+
+        if (chosen.isEmpty()) {
+            chosen = firstVisible;
         }
 
         if (chosen.isEmpty()) {
