@@ -241,7 +241,7 @@ class LocalContextTranslator(
                 val parsed = parseResponse(responseText)
 
                 if (sequence != requestSequence.get()) {
-                    return@launch
+                    return@withLock
                 }
 
                 if (parsed.translations.isEmpty()
