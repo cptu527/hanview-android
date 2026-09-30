@@ -53,6 +53,8 @@ public class ChatGptPlanClient {
             "model";
     private static final String KEY_LAST_ERROR =
             "last_error";
+    private static final String KEY_PENDING_CLIENT_ID =
+            "pending_client_id";
 
     private static final String KEYSTORE_ALIAS =
             "viewnyang_chatgpt_credentials_v1";
@@ -175,7 +177,10 @@ public class ChatGptPlanClient {
 
                 String existingClientId =
                         existing == null
-                                ? ""
+                                ? prefs.getString(
+                                KEY_PENDING_CLIENT_ID,
+                                ""
+                        )
                                 : existing.optString(
                                 "client_id",
                                 ""
@@ -339,6 +344,17 @@ public class ChatGptPlanClient {
                                 "ChatGPT 연결 등록을 완료하지 못했어요."
                         );
                     }
+
+                    // Dynamic registration succeeds before the token exchange.
+                    // Persist the issued client id immediately so an invalid_grant,
+                    // app switch, or network retry does not start registration from
+                    // dynamic_agent_client again.
+                    prefs.edit()
+                            .putString(
+                                    KEY_PENDING_CLIENT_ID,
+                                    issuedClientId
+                            )
+                            .apply();
                 } else {
                     if (issuedClientId == null
                             || issuedClientId.isEmpty()) {
@@ -484,6 +500,7 @@ public class ChatGptPlanClient {
                 prefs.edit()
                         .remove(KEY_LAST_ERROR)
                         .remove(KEY_MODEL)
+                        .remove(KEY_PENDING_CLIENT_ID)
                         .apply();
 
                 String email =
@@ -1453,13 +1470,13 @@ public class ChatGptPlanClient {
         try {
             String title =
                     success
-                            ? "뷰냥 연결 완료"
+                            ? "ChatGPT 승인 완료"
                             : "뷰냥 연결 실패";
 
             String message =
                     success
-                            ? "ChatGPT 연결이 완료되었습니다. 뷰냥으로 돌아가 주세요."
-                            : "ChatGPT 연결을 완료하지 못했습니다. 뷰냥으로 돌아가 다시 시도해 주세요.";
+                            ? "브라우저 승인이 끝났습니다. 뷰냥으로 돌아가면 토큰 확인 후 연결이 최종 완료됩니다."
+                            : "ChatGPT 승인을 완료하지 못했습니다. 뷰냥으로 돌아가 다시 시도해 주세요.";
 
             String html =
                     "<!doctype html><html><head>"
