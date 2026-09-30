@@ -564,88 +564,140 @@ public class ChatGptPlanClient {
         cancelTranslations();
         final int requestSequence = translationSequence.get();
         executor.execute(() -> {
+            Exception lastError = null;
+
+            for (int attempt = 1; attempt <= 3; attempt++) {
+                if (requestSequence != translationSequence.get()) {
+                    return;
+                }
+
+                try {
+                    JSONObject credentials =
+                            ensureFreshCredentials();
+
+                    if (credentials == null
+                            || !hasScope(
+                            credentials.optString(
+                                    "scope",
+                                    ""
+                            ),
+                            REQUIRED_SCOPE
+                    )) {
+                        throw new IllegalStateException(
+                                "ChatGPT가 연결되어 있지 않아요."
+                        );
+                    }
+
+                    String accessToken =
+                            credentials.optString(
+                                    "access_token",
+                                    ""
+                            );
+
+                    if (accessToken.isEmpty()) {
+                        throw new IllegalStateException(
+                                "ChatGPT 로그인 정보가 없어요."
+                        );
+                    }
+
+                    String model =
+                            getOrChooseModel(
+                                    accessToken
+                            );
+
+                    JSONObject request =
+                            buildTranslationRequest(
+                                    blocks,
+                                    model
+                            );
+
+                    String output =
+                            streamResponse(
+                                    accessToken,
+                                    request,
+                                    requestSequence
+                            );
+
+                    Map<Integer, String> translations =
+                            parseTranslations(
+                                    output
+                            );
+
+                    prefs.edit()
+                            .remove(KEY_LAST_ERROR)
+                            .apply();
+
+                    callback.onSuccess(
+                            translations,
+                            model
+                    );
+                    return;
+                } catch (Exception e) {
+                    if (requestSequence != translationSequence.get()) {
+                        return;
+                    }
+
+                    lastError = e;
+
+                    if (attempt < 3
+                            && isTransientTranslationError(e)) {
+                        try {
+                            Thread.sleep(450L * attempt);
+                        } catch (InterruptedException interrupted) {
+                            Thread.currentThread().interrupt();
+                            return;
+                        }
+                        continue;
+                    }
+
+                    break;
+                }
+            }
+
             if (requestSequence != translationSequence.get()) {
-                callback.onError("화면이 바뀌어 이전 번역 요청을 건너뜁니다.");
                 return;
             }
-            try {
-                JSONObject credentials =
-                        ensureFreshCredentials();
 
-                if (credentials == null
-                        || !hasScope(
-                        credentials.optString(
-                                "scope",
-                                ""
-                        ),
-                        REQUIRED_SCOPE
-                )) {
-                    throw new IllegalStateException(
-                            "ChatGPT가 연결되어 있지 않아요."
+            String message =
+                    safeMessage(
+                            lastError,
+                            "ChatGPT 번역에 실패했어요."
                     );
-                }
 
-                String accessToken =
-                        credentials.optString(
-                                "access_token",
-                                ""
-                        );
+            prefs.edit()
+                    .putString(
+                            KEY_LAST_ERROR,
+                            message
+                    )
+                    .apply();
 
-                if (accessToken.isEmpty()) {
-                    throw new IllegalStateException(
-                            "ChatGPT 로그인 정보가 없어요."
-                    );
-                }
-
-                String model =
-                        getOrChooseModel(
-                                accessToken
-                        );
-
-                JSONObject request =
-                        buildTranslationRequest(
-                                blocks,
-                                model
-                        );
-
-                String output =
-                        streamResponse(
-                                accessToken,
-                                request,
-                                requestSequence
-                        );
-
-                Map<Integer, String> translations =
-                        parseTranslations(
-                                output
-                        );
-
-                prefs.edit()
-                        .remove(KEY_LAST_ERROR)
-                        .apply();
-
-                callback.onSuccess(
-                        translations,
-                        model
-                );
-            } catch (Exception e) {
-                if (requestSequence != translationSequence.get()) return;
-                String message =
-                        safeMessage(
-                                e,
-                                "ChatGPT 번역에 실패했어요."
-                        );
-
-                prefs.edit()
-                        .putString(
-                                KEY_LAST_ERROR,
-                                message
-                        )
-                        .apply();
-
-                callback.onError(message);
-            }
+            callback.onError(message);
         });
+    }
+
+    private boolean isTransientTranslationError(Exception error) {
+        if (error instanceof java.io.IOException) {
+            return true;
+        }
+
+        String message =
+                error == null || error.getMessage() == null
+                        ? ""
+                        : error.getMessage().toLowerCase(java.util.Locale.ROOT);
+
+        return message.contains("server 오류 (500)")
+                || message.contains("server 오류 (502)")
+                || message.contains("server 오류 (503)")
+                || message.contains("server 오류 (504)")
+                || message.contains("서버 오류 (500)")
+                || message.contains("서버 오류 (502)")
+                || message.contains("서버 오류 (503)")
+                || message.contains("서버 오류 (504)")
+                || message.contains("timeout")
+                || message.contains("timed out")
+                || message.contains("connection reset")
+                || message.contains("unexpected end of stream")
+                || message.contains("temporarily unavailable");
     }
 
     private JSONObject buildTranslationRequest(
