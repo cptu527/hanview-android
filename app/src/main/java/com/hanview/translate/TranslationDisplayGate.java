@@ -6,7 +6,11 @@ final class TranslationDisplayGate {
     private boolean visible = true;
     synchronized int current() { return generation; }
     synchronized void invalidate() { generation++; }
-    synchronized void setVisible(boolean value) { visible = value; generation++; }
+    synchronized void setVisible(boolean value) {
+        if (visible == value) return;
+        visible = value;
+        generation++;
+    }
     synchronized boolean isVisible() { return visible; }
     synchronized boolean canDisplay(int token) { return visible && generation == token; }
 }

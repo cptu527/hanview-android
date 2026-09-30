@@ -10,8 +10,8 @@ android {
         applicationId = "com.viewnyang.app"
         minSdk = 24
         targetSdk = 37
-        versionCode = 69
-        versionName = "0.9.3"
+        versionCode = 70
+        versionName = "0.9.4"
     }
 
     signingConfigs {

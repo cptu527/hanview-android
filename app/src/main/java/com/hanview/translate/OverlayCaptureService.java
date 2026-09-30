@@ -252,15 +252,29 @@ public class OverlayCaptureService extends Service {
             startAsForeground();
 
             if (mediaProjection == null) {
-                startProjection(resultCode, resultData);
+                // Arm capture BEFORE creating the virtual display. A static page
+                // may emit only its initial frame; previously that frame arrived
+                // while liveEnabled/captureRequested were still false, got dropped,
+                // and the floating button stayed at ON forever.
                 liveEnabled = true;
                 displayGate.invalidate();
                 cleanCaptureRequested = true;
                 lastMonitorFingerprint = null;
+                captureRequested = true;
+                captureRequestedAtMs =
+                        SystemClock.uptimeMillis();
+
                 showBubble();
+                startProjection(
+                        resultCode,
+                        resultData
+                );
 
                 captureHandler.removeCallbacks(liveLoop);
-                captureHandler.postDelayed(liveLoop, 120L);
+                captureHandler.postDelayed(
+                        liveLoop,
+                        120L
+                );
             }
 
             return START_STICKY;
