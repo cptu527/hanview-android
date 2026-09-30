@@ -1435,7 +1435,7 @@ public class OverlayCaptureService extends Service {
         processing = false;
         mainHandler.post(() -> {
             if (bubble != null && liveEnabled && displayGate.canDisplay(frameGeneration)) {
-                bubble.setText("번역…");
+                bubble.setText("번역중");
             }
 
             mainHandler.postDelayed(() -> {
