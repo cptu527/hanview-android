@@ -1,6 +1,7 @@
 package com.hanview.translate;
 
 import android.content.Context;
+import android.content.SharedPreferences;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import java.io.BufferedReader;
@@ -10,6 +11,7 @@ import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -22,12 +24,16 @@ import java.util.concurrent.Executors;
 public class TranslationEngine {
     public static final String PREFS = "hanview";
     public static final String KEY_ENDPOINT = "translation_endpoint";
+    private static final String CACHE_PREFS = "viewnyang_gpt_page_cache_v1";
+    private static final String CACHE_INDEX = "_index";
+    private static final int MAX_PERSISTED_PAGES = 80;
     public interface Callback {
         void onSuccess(List<OcrBlock> blocks, boolean usedAi);
         void onError(String message);
     }
     private final Context context;
     private final ChatGptPlanClient chatGptPlanClient;
+    private final SharedPreferences persistentCache;
     private final ExecutorService networkExecutor = Executors.newSingleThreadExecutor();
     // Cache whole pages: a fragment must not reuse a translation from a different conversation.
     private final Map<String, List<String>> pageCache = Collections.synchronizedMap(
@@ -40,6 +46,7 @@ public class TranslationEngine {
     public TranslationEngine(Context context) {
         this.context = context.getApplicationContext();
         chatGptPlanClient = new ChatGptPlanClient(this.context);
+        persistentCache = this.context.getSharedPreferences(CACHE_PREFS, Context.MODE_PRIVATE);
     }
 
     public void translate(List<OcrBlock> blocks, Callback callback) {
@@ -51,14 +58,23 @@ public class TranslationEngine {
             callback.onError("뷰냥에서 ChatGPT를 연결해 주세요. 기기 번역으로 대신 표시하지 않습니다.");
             return;
         }
+        // The whole visible page is the context boundary. Do not include pixel
+        // coordinates in the cache key: browser chrome shifts, zoom jitter and tiny
+        // OCR box movement must not spend another ChatGPT-plan request for the same page.
         StringBuilder signature = new StringBuilder(connected ? "gpt:" : endpoint + ":");
         for (OcrBlock block : blocks) {
-            signature.append(block.original.length()).append(':').append(block.original)
-                    .append('@').append(block.bounds.left).append(',').append(block.bounds.top)
-                    .append(',').append(block.verticalSource).append(';');
+            String source = block.original == null ? "" : block.original.trim().replaceAll("\\s+", " ");
+            signature.append(source.length()).append(':').append(source)
+                    .append('|').append(block.verticalSource).append(';');
         }
         String key = signature.toString();
+
         List<String> cached = pageCache.get(key);
+        if (cached == null && connected) {
+            cached = loadPersistedPage(key, blocks.size());
+            if (cached != null) pageCache.put(key, cached);
+        }
+
         if (cached != null && cached.size() == blocks.size()) {
             for (int i = 0; i < blocks.size(); i++) blocks.get(i).translated = cached.get(i);
             callback.onSuccess(blocks, true);
@@ -69,6 +85,7 @@ public class TranslationEngine {
                 List<String> values = new ArrayList<>();
                 for (OcrBlock block : translated) values.add(block.translated);
                 pageCache.put(key, values);
+                if (connected) savePersistedPage(key, values);
                 callback.onSuccess(translated, true);
             }
             @Override public void onError(String message) { callback.onError(message); }
@@ -168,6 +185,72 @@ public class TranslationEngine {
                 if (conn != null) conn.disconnect();
             }
         });
+    }
+
+    private List<String> loadPersistedPage(String pageKey, int expectedSize) {
+        try {
+            String raw = persistentCache.getString(cacheKey(pageKey), "");
+            if (raw.isEmpty()) return null;
+            JSONArray values = new JSONArray(raw);
+            if (values.length() != expectedSize) return null;
+            List<String> out = new ArrayList<>();
+            for (int i = 0; i < values.length(); i++) {
+                String value = values.optString(i, "").trim();
+                if (value.isEmpty()) return null;
+                out.add(value);
+            }
+            return out;
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private synchronized void savePersistedPage(String pageKey, List<String> values) {
+        try {
+            String hash = cacheKey(pageKey);
+            JSONArray payload = new JSONArray();
+            for (String value : values) payload.put(value == null ? "" : value);
+
+            JSONArray oldIndex;
+            try {
+                oldIndex = new JSONArray(persistentCache.getString(CACHE_INDEX, "[]"));
+            } catch (Exception ignored) {
+                oldIndex = new JSONArray();
+            }
+
+            JSONArray nextIndex = new JSONArray();
+            for (int i = 0; i < oldIndex.length(); i++) {
+                String item = oldIndex.optString(i, "");
+                if (!item.isEmpty() && !hash.equals(item)) nextIndex.put(item);
+            }
+            nextIndex.put(hash);
+
+            SharedPreferences.Editor editor = persistentCache.edit()
+                    .putString(hash, payload.toString());
+
+            while (nextIndex.length() > MAX_PERSISTED_PAGES) {
+                String oldest = nextIndex.optString(0, "");
+                JSONArray trimmed = new JSONArray();
+                for (int i = 1; i < nextIndex.length(); i++) trimmed.put(nextIndex.optString(i, ""));
+                nextIndex = trimmed;
+                if (!oldest.isEmpty()) editor.remove(oldest);
+            }
+
+            editor.putString(CACHE_INDEX, nextIndex.toString()).apply();
+        } catch (Exception ignored) {
+        }
+    }
+
+    private String cacheKey(String value) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] bytes = digest.digest(value.getBytes(StandardCharsets.UTF_8));
+            StringBuilder out = new StringBuilder("p_");
+            for (byte b : bytes) out.append(String.format(java.util.Locale.ROOT, "%02x", b & 0xff));
+            return out.toString();
+        } catch (Exception ignored) {
+            return "p_" + Integer.toHexString(value.hashCode());
+        }
     }
 
     private static String readAll(InputStream in) throws Exception {
