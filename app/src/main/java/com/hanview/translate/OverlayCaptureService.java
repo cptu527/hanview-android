@@ -1010,7 +1010,7 @@ public class OverlayCaptureService extends Service {
                                         ? (
                                         usedAi
                                                 ? "문"
-                                                : "한"
+                                                : "초"
                                 )
                                         : "!"
                         );
@@ -1939,7 +1939,7 @@ public class OverlayCaptureService extends Service {
 
         bubble.setText(
                 enabled
-                        ? "한"
+                        ? "ON"
                         : "OFF"
         );
 
