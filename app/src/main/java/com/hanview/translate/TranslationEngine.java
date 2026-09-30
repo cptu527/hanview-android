@@ -45,6 +45,7 @@ public class TranslationEngine {
     private final Context context;
     private final ExecutorService networkExecutor = Executors.newSingleThreadExecutor();
     private final LanguageIdentifier languageIdentifier = LanguageIdentification.getClient();
+    private final ChatGptPlanClient chatGptPlanClient;
     private final Map<String, Translator> translators = new ConcurrentHashMap<>();
     private final Set<String> readyModels = ConcurrentHashMap.newKeySet();
 
@@ -60,8 +61,10 @@ public class TranslationEngine {
 
     public TranslationEngine(Context context) {
         this.context = context.getApplicationContext();
-        // Load only the model needed for the language currently on screen.
-        // This avoids allocating several translation models beside OCR at once.
+        this.chatGptPlanClient =
+                new ChatGptPlanClient(this.context);
+        // ChatGPT plan translation is preferred when connected.
+        // ML Kit remains only as a no-network / no-plan fallback.
     }
 
     public static void prewarmCommon(Context context) {
@@ -128,11 +131,79 @@ public class TranslationEngine {
             }
         };
 
-        if (!endpoint.isEmpty()) {
+        if (chatGptPlanClient.hasPlanAccess()) {
+            translateWithChatGpt(
+                    pending,
+                    mergeBack
+            );
+        } else if (!endpoint.isEmpty()) {
             translateRemote(endpoint, pending, mergeBack);
         } else {
             translateLocalAuto(pending, mergeBack);
         }
+    }
+
+    private void translateWithChatGpt(
+            List<OcrBlock> blocks,
+            Callback callback
+    ) {
+        chatGptPlanClient.translate(
+                blocks,
+                new ChatGptPlanClient.TranslationCallback() {
+                    @Override
+                    public void onSuccess(
+                            Map<Integer, String> translations,
+                            String model
+                    ) {
+                        int translatedCount = 0;
+
+                        for (OcrBlock block : blocks) {
+                            String translated =
+                                    translations.get(
+                                            block.id
+                                    );
+
+                            if (translated != null
+                                    && !translated.trim().isEmpty()
+                                    && !translated.trim().equals(
+                                    block.original
+                            )) {
+                                block.translated =
+                                        translated.trim();
+                                translatedCount++;
+                            }
+                        }
+
+                        if (translatedCount == 0) {
+                            // A valid GPT session should normally translate at least
+                            // one foreign block. Keep the screen usable if it did not.
+                            translateLocalAuto(
+                                    blocks,
+                                    callback
+                            );
+                            return;
+                        }
+
+                        callback.onSuccess(
+                                blocks,
+                                true
+                        );
+                    }
+
+                    @Override
+                    public void onError(
+                            String message
+                    ) {
+                        // No extra billing fallback: when ChatGPT plan use is
+                        // temporarily unavailable or its limit is reached, fall
+                        // back to the bundled offline translator.
+                        translateLocalAuto(
+                                blocks,
+                                callback
+                        );
+                    }
+                }
+        );
     }
 
     private void translateRemote(
