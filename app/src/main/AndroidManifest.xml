@@ -19,6 +19,10 @@
         <uses-native-library android:name="libOpenCL.so" android:required="false" />
 
         <activity
+            android:name=".BrowserTranslateActivity"
+            android:exported="false" />
+
+        <activity
             android:name=".GptTranslationLabActivity"
             android:exported="false" />
 
