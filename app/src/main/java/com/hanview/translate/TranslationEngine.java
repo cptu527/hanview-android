@@ -360,6 +360,65 @@ public class TranslationEngine {
         );
     }
 
+    public void translateFastOnly(
+            List<OcrBlock> blocks,
+            Callback callback
+    ) {
+        if (blocks == null
+                || blocks.isEmpty()) {
+            callback.onSuccess(
+                    blocks == null
+                            ? Collections.emptyList()
+                            : blocks,
+                    false
+            );
+            return;
+        }
+
+        final int sequence =
+                requestSequence.incrementAndGet();
+
+        localContextTranslator.cancelPending();
+
+        translateLocalNatural(
+                blocks,
+                inferPageLanguage(
+                        blocks
+                ),
+                new Callback() {
+                    @Override
+                    public void onSuccess(
+                            List<OcrBlock> translated,
+                            boolean usedAi
+                    ) {
+                        if (sequence
+                                != requestSequence.get()) {
+                            return;
+                        }
+
+                        callback.onSuccess(
+                                translated,
+                                false
+                        );
+                    }
+
+                    @Override
+                    public void onError(
+                            String message
+                    ) {
+                        if (sequence
+                                != requestSequence.get()) {
+                            return;
+                        }
+
+                        callback.onError(
+                                message
+                        );
+                    }
+                }
+        );
+    }
+
     private boolean shouldUseContextModel(
             List<OcrBlock> blocks
     ) {
