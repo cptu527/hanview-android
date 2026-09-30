@@ -73,20 +73,18 @@ class LocalContextTranslator(
 
                 val systemInstruction = Contents.of(
                     "/no_think\n" +
-                            "너는 일본 만화·소설을 한국어로 현지화하는 전문 번역가다. " +
-                            "화면에 보이는 모든 OCR 문장을 하나의 장면으로 읽고 번역한다. " +
-                            "일본어의 생략된 주어·목적어, 인물 관계, 높임말, 말투, 감정, 앞뒤 문장을 함께 고려하되 " +
-                            "원문에 없는 설정이나 사실을 만들지 않는다. " +
-                            "직역체를 피하고 실제 한국어 대사와 소설 문장처럼 자연스럽게 쓴다. " +
-                            "특히 '나는/당신/그것/것이다' 같은 불필요한 대명사와 일본어식 문형 반복을 줄인다. " +
-                            "존댓말과 반말은 장면 안에서 일관되게 유지한다. " +
-                            "고유명사·숫자·의미는 보존하고 검열하거나 요약하지 않는다. " +
-                            "세로쓰기 일본 만화는 같은 세로열 안에서 위에서 아래로, 열은 오른쪽에서 왼쪽 순서로 읽는다. " +
-                            "OCR 오탈자는 문맥상 명백한 경우만 바로잡는다. " +
-                            "설명이나 사고 과정은 절대 출력하지 말고, 번역문만 반환한다. " +
-                            "출력은 반드시 다음 JSON 형식만 사용한다: " +
-                            "{\"translations\":[{\"id\":0,\"text\":\"자연스러운 한국어 번역\"}]}. " +
-                            "입력된 모든 id를 정확히 한 번씩 반환한다."
+                            "너는 일본어 세로쓰기 만화 전문 한국어 번역가다. " +
+                            "입력 배열은 이미 만화의 실제 읽는 순서(오른쪽 열에서 왼쪽 열, 각 열은 위에서 아래)로 정렬되어 있다. " +
+                            "절대로 순서를 재배열하지 말고 reading_order 순서 그대로 장면을 이해한다. " +
+                            "각 item의 text는 서로 다른 세로열일 수 있으므로 임의로 두 item을 이어 붙여 새 문장을 만들지 않는다. " +
+                            "다만 앞뒤 item의 의미는 문맥으로만 참고해 생략된 주어·대상·인물 관계·존댓말·반말·감정을 자연스럽게 복원한다. " +
+                            "직역체를 피하고 한국 만화 대사처럼 짧고 자연스럽게 쓴다. " +
+                            "원문에 없는 정보, 설명, 해설, 번역 노트, 요약은 절대 추가하지 않는다. " +
+                            "특히 '한국어로 번역됨', '자연스럽게 번역', '문장은', '유지됩니다', '원문의 의미' 같은 메타 설명을 절대 출력하지 않는다. " +
+                            "고유명사·숫자·의미는 보존하고, 원문의 질문은 질문으로, 호소는 호소로 유지한다. " +
+                            "출력은 반드시 JSON 하나만 반환한다: " +
+                            "{\"translations\":[{\"id\":0,\"text\":\"번역문\"}]}. " +
+                            "모든 입력 id를 정확히 한 번씩 반환하고 text에는 번역문 외의 말을 넣지 않는다."
                 )
 
                 val config = ConversationConfig(
@@ -169,7 +167,12 @@ class LocalContextTranslator(
         }
 
         return JSONObject()
-            .put("task", "translate_visible_page_to_natural_korean")
+            .put(
+                "task",
+                "Translate each item from Japanese to natural Korean. " +
+                        "Use neighboring items only as context. " +
+                        "Do not merge items and do not add commentary."
+            )
             .put("items", items)
             .toString()
     }
@@ -202,12 +205,41 @@ class LocalContextTranslator(
             val id = item.optInt("id", Int.MIN_VALUE)
             val text = item.optString("text", "").trim()
 
-            if (id != Int.MIN_VALUE && text.isNotEmpty()) {
+            if (id != Int.MIN_VALUE
+                && text.isNotEmpty()
+                && !looksLikeMetaCommentary(text)
+            ) {
                 out[id] = text
             }
         }
 
         return out
+    }
+
+    private fun looksLikeMetaCommentary(
+        text: String
+    ): Boolean {
+        val compact = text.replace("\n", " ").trim()
+
+        val banned = listOf(
+            "한국어로 자연스럽게 번역",
+            "자연스럽게 번역됨",
+            "모든 문장",
+            "유지됩니다",
+            "원문의 의미",
+            "번역문은",
+            "번역 결과",
+            "다음과 같이 번역",
+            "json",
+            "translation"
+        )
+
+        return banned.any {
+            compact.contains(
+                it,
+                ignoreCase = true
+            )
+        }
     }
 
     fun close() {
