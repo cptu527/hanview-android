@@ -154,7 +154,7 @@ public class TranslationEngine {
         }
 
         String refinedKey =
-                "llm-v14:"
+                "llm-v15:"
                         + baseKey;
 
         if (useContextModel) {
@@ -214,7 +214,7 @@ public class TranslationEngine {
         }
 
         String fastKey =
-                "fast-v14:"
+                "fast-v15:"
                         + baseKey;
 
         List<String> fastCached =
