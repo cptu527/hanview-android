@@ -96,8 +96,10 @@ public class TranslationPatchManager {
             view.setText(translated);
             view.setTextColor(block.textColor);
             view.setGravity(
-                    Gravity.CENTER_VERTICAL
-                            | Gravity.START
+                    vertical
+                            ? Gravity.CENTER
+                            : (Gravity.CENTER_VERTICAL
+                            | Gravity.START)
             );
             view.setTypeface(
                     Typeface.DEFAULT,
@@ -108,12 +110,15 @@ public class TranslationPatchManager {
                     sourceTextPx
             );
             view.setIncludeFontPadding(false);
-            view.setLineSpacing(0f, 1.0f);
+            view.setLineSpacing(
+                    vertical ? dp(1) : 0f,
+                    vertical ? 1.08f : 1.0f
+            );
             view.setPadding(
-                    dp(2),
-                    0,
-                    dp(2),
-                    0
+                    vertical ? dp(5) : dp(2),
+                    vertical ? dp(3) : 0,
+                    vertical ? dp(5) : dp(2),
+                    vertical ? dp(3) : 0
             );
 
             int left =
@@ -131,25 +136,40 @@ public class TranslationPatchManager {
             int height;
 
             if (vertical) {
+                int idealWidth =
+                        Math.max(
+                                block.bounds.width() + dp(10),
+                                dp(82)
+                        );
+
+                idealWidth =
+                        Math.min(
+                                idealWidth,
+                                dp(155)
+                        );
+
                 width =
                         Math.min(
                                 screenWidth - left,
-                                Math.max(
-                                        block.bounds.width() + dp(4),
-                                        dp(70)
-                                )
+                                idealWidth
                         );
+
+                int extraHeight =
+                        translated.length() > 34
+                                ? dp(22)
+                                : dp(10);
 
                 height =
                         Math.min(
                                 screenHeight - top,
                                 Math.max(
-                                        block.bounds.height() + dp(2),
-                                        dp(36)
+                                        block.bounds.height()
+                                                + extraHeight,
+                                        dp(52)
                                 )
                         );
 
-                view.setMaxLines(8);
+                view.setMaxLines(6);
             } else {
                 width =
                         Math.min(
@@ -188,8 +208,11 @@ public class TranslationPatchManager {
                         );
 
                 view.setAutoSizeTextTypeUniformWithConfiguration(
-                        6,
-                        maxSp,
+                        vertical ? 8 : 7,
+                        Math.max(
+                                vertical ? 10 : 8,
+                                maxSp
+                        ),
                         1,
                         TypedValue.COMPLEX_UNIT_SP
                 );
