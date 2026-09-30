@@ -1098,6 +1098,16 @@ public class ChatGptPlanClient {
                 "stream",
                 true
         );
+        root.put(
+                "max_output_tokens",
+                Math.max(
+                        320,
+                        Math.min(
+                                1000,
+                                140 + blocks.size() * 48
+                        )
+                )
+        );
 
         return root;
     }
