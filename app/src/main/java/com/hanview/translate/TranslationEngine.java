@@ -115,20 +115,251 @@ public class TranslationEngine {
             return;
         }
 
+        // Every new screen invalidates a slower refinement from the previous one.
+        localContextTranslator.cancelPending();
+
         String pageHint =
                 inferPageLanguage(blocks);
 
-        String key =
-                (
-                        localContextTranslator.isReady()
-                                ? "llm-v3:"
-                                : "local-v4:"
-                )
-                        + buildPageKey(
+        String baseKey =
+                buildPageKey(
                         blocks,
                         pageHint
                 );
 
+        boolean useContextModel =
+                "ja".equals(pageHint)
+                        && localContextTranslator.isReady()
+                        && shouldUseContextModel(blocks);
+
+        String refinedKey =
+                "llm-v5:"
+                        + baseKey;
+
+        if (useContextModel) {
+            List<String> refinedCached =
+                    getCachedPage(
+                            refinedKey,
+                            blocks.size()
+                    );
+
+            if (refinedCached != null) {
+                applyCachedPage(
+                        blocks,
+                        refinedCached
+                );
+                callback.onSuccess(
+                        blocks,
+                        true
+                );
+                return;
+            }
+        }
+
+        // Fast path is always first. This is what Taobao/Chinese pages use,
+        // and Japanese manga gets this immediately while the larger LLM
+        // refines the same screen in the background.
+        String fastKey =
+                "fast-v5:"
+                        + baseKey;
+
+        List<String> fastCached =
+                getCachedPage(
+                        fastKey,
+                        blocks.size()
+                );
+
+        if (fastCached != null) {
+            applyCachedPage(
+                    blocks,
+                    fastCached
+            );
+
+            callback.onSuccess(
+                    blocks,
+                    false
+            );
+
+            if (useContextModel) {
+                refineWithContextModel(
+                        copyBlocks(blocks),
+                        refinedKey,
+                        callback
+                );
+            }
+            return;
+        }
+
+        translateLocalNatural(
+                blocks,
+                pageHint,
+                new Callback() {
+                    @Override
+                    public void onSuccess(
+                            List<OcrBlock> translated,
+                            boolean usedAi
+                    ) {
+                        saveCachedPage(
+                                fastKey,
+                                translated
+                        );
+
+                        // Never make the user wait for the LLM just to see a translation.
+                        callback.onSuccess(
+                                translated,
+                                false
+                        );
+
+                        if (useContextModel) {
+                            refineWithContextModel(
+                                    copyBlocks(translated),
+                                    refinedKey,
+                                    callback
+                            );
+                        }
+                    }
+
+                    @Override
+                    public void onError(
+                            String message
+                    ) {
+                        callback.onError(message);
+                    }
+                }
+        );
+    }
+
+    private boolean shouldUseContextModel(
+            List<OcrBlock> blocks
+    ) {
+        int vertical = 0;
+        int kana = 0;
+
+        for (OcrBlock block : blocks) {
+            if (block.verticalSource
+                    || block.bounds.height()
+                    > block.bounds.width() * 1.8f) {
+                vertical++;
+            }
+
+            String value =
+                    block.original;
+
+            if (value == null) {
+                continue;
+            }
+
+            for (int i = 0;
+                 i < value.length();
+                 i++) {
+                char ch =
+                        value.charAt(i);
+
+                if (ch >= 0x3040
+                        && ch <= 0x30FF) {
+                    kana++;
+                }
+            }
+        }
+
+        return vertical >= 2
+                && kana >= 2;
+    }
+
+    private void refineWithContextModel(
+            List<OcrBlock> blocks,
+            String cacheKey,
+            Callback callback
+    ) {
+        localContextTranslator.translate(
+                blocks,
+                new LocalContextTranslator.Callback() {
+                    @Override
+                    public void onSuccess(
+                            Map<Integer, String> translations
+                    ) {
+                        int accepted = 0;
+
+                        for (OcrBlock block : blocks) {
+                            String value =
+                                    translations.get(
+                                            block.id
+                                    );
+
+                            if (value == null
+                                    || value.trim().isEmpty()) {
+                                continue;
+                            }
+
+                            block.translated =
+                                    value.trim();
+                            accepted++;
+                        }
+
+                        int minimum =
+                                Math.max(
+                                        1,
+                                        (int) Math.ceil(
+                                                blocks.size()
+                                                        * 0.65
+                                        )
+                                );
+
+                        if (accepted < minimum) {
+                            return;
+                        }
+
+                        saveCachedPage(
+                                cacheKey,
+                                blocks
+                        );
+
+                        callback.onSuccess(
+                                blocks,
+                                true
+                        );
+                    }
+
+                    @Override
+                    public void onError(
+                            String message
+                    ) {
+                        // The fast translation is already on screen.
+                        // A slow refinement failure must never make live translation fail.
+                    }
+                }
+        );
+    }
+
+    private List<OcrBlock> copyBlocks(
+            List<OcrBlock> source
+    ) {
+        List<OcrBlock> out =
+                new ArrayList<>();
+
+        for (OcrBlock block : source) {
+            OcrBlock copy =
+                    new OcrBlock(
+                            block.id,
+                            block.original,
+                            block.bounds
+                    );
+
+            copy.translated =
+                    block.translated;
+            copy.copyVisualStyleFrom(
+                    block
+            );
+            out.add(copy);
+        }
+
+        return out;
+    }
+
+    private List<String> getCachedPage(
+            String key,
+            int expectedSize
+    ) {
         List<String> cached =
                 pageCache.get(key);
 
@@ -136,7 +367,7 @@ public class TranslationEngine {
             cached =
                     loadPersistedPage(
                             key,
-                            blocks.size()
+                            expectedSize
                     );
 
             if (cached != null) {
@@ -147,156 +378,44 @@ public class TranslationEngine {
             }
         }
 
-        if (cached != null
-                && cached.size() == blocks.size()) {
-            for (int i = 0;
-                 i < blocks.size();
-                 i++) {
-                blocks.get(i).translated =
-                        cached.get(i);
-            }
+        return cached;
+    }
 
-            callback.onSuccess(
-                    blocks,
-                    localContextTranslator.isReady()
-            );
-            return;
-        }
-
-        Callback cacheAndReturn =
-                new Callback() {
-                    @Override
-                    public void onSuccess(
-                            List<OcrBlock> translated,
-                            boolean usedAi
-                    ) {
-                        List<String> values =
-                                new ArrayList<>();
-
-                        for (OcrBlock block :
-                                translated) {
-                            values.add(
-                                    block.translated
-                            );
-                        }
-
-                        pageCache.put(
-                                key,
-                                values
-                        );
-                        savePersistedPage(
-                                key,
-                                values
-                        );
-
-                        callback.onSuccess(
-                                translated,
-                                usedAi
-                        );
-                    }
-
-                    @Override
-                    public void onError(
-                            String message
-                    ) {
-                        callback.onError(message);
-                    }
-                };
-
-        if (localContextTranslator.isReady()) {
-            translateWithLocalContextModel(
-                    blocks,
-                    pageHint,
-                    cacheAndReturn
-            );
-        } else {
-            translateLocalNatural(
-                    blocks,
-                    pageHint,
-                    cacheAndReturn
-            );
+    private void applyCachedPage(
+            List<OcrBlock> blocks,
+            List<String> values
+    ) {
+        for (int i = 0;
+             i < blocks.size()
+                     && i < values.size();
+             i++) {
+            blocks.get(i).translated =
+                    values.get(i);
         }
     }
 
-    private void translateWithLocalContextModel(
-            List<OcrBlock> blocks,
-            String pageHint,
-            Callback callback
+    private void saveCachedPage(
+            String key,
+            List<OcrBlock> blocks
     ) {
-        localContextTranslator.translate(
-                blocks,
-                new LocalContextTranslator.Callback() {
-                    @Override
-                    public void onSuccess(
-                            Map<Integer, String> translations
-                    ) {
-                        List<OcrBlock> missing =
-                                new ArrayList<>();
+        List<String> values =
+                new ArrayList<>();
 
-                        for (OcrBlock block : blocks) {
-                            String value =
-                                    translations.get(
-                                            block.id
-                                    );
+        for (OcrBlock block : blocks) {
+            values.add(
+                    block.translated == null
+                            ? ""
+                            : block.translated
+            );
+        }
 
-                            if (value == null
-                                    || value.trim().isEmpty()) {
-                                missing.add(block);
-                            } else {
-                                block.translated =
-                                        value.trim();
-                            }
-                        }
-
-                        if (missing.isEmpty()) {
-                            callback.onSuccess(
-                                    blocks,
-                                    true
-                            );
-                            return;
-                        }
-
-                        translateLocalNatural(
-                                missing,
-                                pageHint,
-                                new Callback() {
-                                    @Override
-                                    public void onSuccess(
-                                            List<OcrBlock> ignored,
-                                            boolean usedAi
-                                    ) {
-                                        callback.onSuccess(
-                                                blocks,
-                                                true
-                                        );
-                                    }
-
-                                    @Override
-                                    public void onError(
-                                            String message
-                                    ) {
-                                        callback.onSuccess(
-                                                blocks,
-                                                true
-                                        );
-                                    }
-                                }
-                        );
-                    }
-
-                    @Override
-                    public void onError(
-                            String message
-                    ) {
-                        // If the local LLM cannot initialize or parse one page,
-                        // keep live translation usable with the bundled translator.
-                        translateLocalNatural(
-                                blocks,
-                                pageHint,
-                                callback
-                        );
-                    }
-                }
+        pageCache.put(
+                key,
+                values
+        );
+        savePersistedPage(
+                key,
+                values
         );
     }
 
