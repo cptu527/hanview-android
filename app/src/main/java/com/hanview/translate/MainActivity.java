@@ -180,7 +180,7 @@ public class MainActivity extends Activity {
                 "① 위 권한을 한 번 허용\n" +
                 "② 실시간 번역 시작 → 화면 공유 허용\n" +
                 "③ 원하는 앱으로 돌아가 그냥 스크롤\n" +
-                "④ ‘한’은 빠른 번역, ‘문’은 고급 문맥 보정 완료 상태"
+                "④ ‘ON’은 대기, ‘OCR…’은 글자 인식, ‘번역…’은 번역 중, ‘초’는 빠른 초벌번역, ‘문’은 고급 문맥 보정 완료 상태"
         );
         LinearLayout.LayoutParams guideLp = spaced();
         guideLp.topMargin = dp(24);
