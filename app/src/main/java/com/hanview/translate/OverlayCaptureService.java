@@ -1047,8 +1047,30 @@ public class OverlayCaptureService extends Service {
                                     candidate.bounds
                             );
 
-                    if (overlap >= 0.55f
-                            && gap <= dp(44)) {
+                    Rect candidateBounds =
+                            new Rect(groupBounds);
+                    candidateBounds.union(
+                            candidate.bounds
+                    );
+
+                    int maxGroupWidth =
+                            Math.min(
+                                    dp(150),
+                                    Math.max(
+                                            dp(92),
+                                            Math.round(
+                                                    captureWidth * 0.34f
+                                            )
+                                    )
+                            );
+
+                    // Do not let adjacent vertical columns chain across the
+                    // whole manga page. Keep each translated paragraph compact.
+                    if (overlap >= 0.68f
+                            && gap <= dp(18)
+                            && group.size() < 5
+                            && candidateBounds.width()
+                            <= maxGroupWidth) {
                         group.add(candidate);
                         used[j] = true;
                         expanded = true;
@@ -1075,12 +1097,18 @@ public class OverlayCaptureService extends Service {
             float glyphWidth = Float.MAX_VALUE;
 
             for (OcrBlock block : group) {
-                if (combined.length() > 0) {
-                    combined.append(' ');
+                if (combined.length() > 0
+                        && !endsWithJapanesePunctuation(
+                        combined
+                )) {
+                    // Japanese does not use word spaces. Joining neighboring
+                    // columns directly gives the translator a continuous sentence.
                 }
 
                 combined.append(
                         block.original
+                                .replace("\n", "")
+                                .replace(" ", "")
                 );
 
                 glyphWidth =
@@ -1121,6 +1149,27 @@ public class OverlayCaptureService extends Service {
         );
 
         return horizontal;
+    }
+
+    private boolean endsWithJapanesePunctuation(
+            StringBuilder value
+    ) {
+        if (value.length() == 0) {
+            return false;
+        }
+
+        char c =
+                value.charAt(
+                        value.length() - 1
+                );
+
+        return c == '。'
+                || c == '！'
+                || c == '？'
+                || c == '!'
+                || c == '?'
+                || c == '」'
+                || c == '』';
     }
 
     private Rect unionBounds(
