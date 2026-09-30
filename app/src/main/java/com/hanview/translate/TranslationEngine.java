@@ -83,9 +83,12 @@ public class TranslationEngine {
         warmUp("en");
         warmUp("zh");
 
-        // Do not load the multi-GB context model here. Shopping/Chinese pages
-        // must stay lightweight; the large model is loaded lazily only after
-        // an actual Japanese vertical-manga page has been detected.
+        // The live translation service is already running at this point. If
+        // the user installed the 4B model, initialize it asynchronously now so
+        // OCR and model startup overlap instead of making the first page wait.
+        if (localContextTranslator.isReady()) {
+            localContextTranslator.warmUp();
+        }
     }
 
     public static void prewarmCommon(Context context) {
@@ -151,7 +154,7 @@ public class TranslationEngine {
         }
 
         String refinedKey =
-                "llm-v10:"
+                "llm-v11:"
                         + baseKey;
 
         if (useContextModel) {
@@ -211,7 +214,7 @@ public class TranslationEngine {
         }
 
         String fastKey =
-                "fast-v10:"
+                "fast-v11:"
                         + baseKey;
 
         List<String> fastCached =

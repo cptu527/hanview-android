@@ -1480,7 +1480,7 @@ public class OverlayCaptureService extends Service {
                             1250L
                     );
                 }
-            }, 120000L);
+            }, 60000L);
         });
         translationEngine.translate(normalized, new TranslationEngine.Callback() {
             @Override public void onSuccess(List<OcrBlock> translated, boolean usedAi) {
