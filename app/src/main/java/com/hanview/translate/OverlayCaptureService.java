@@ -1736,7 +1736,7 @@ public class OverlayCaptureService extends Service {
         });
     }
 
-    private List<OcrBlock> orderRecognizedBlocks(    private List<OcrBlock> orderRecognizedBlocks(
+    private List<OcrBlock> orderRecognizedBlocks(
             List<OcrBlock> source
     ) {
         List<OcrBlock> ordered =
