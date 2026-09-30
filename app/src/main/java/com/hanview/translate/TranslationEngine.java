@@ -156,7 +156,7 @@ public class TranslationEngine {
         }
 
         String refinedKey =
-                "llm-v15:"
+                "llm-v16:"
                         + baseKey;
 
         if (useContextModel) {
@@ -514,7 +514,12 @@ public class TranslationEngine {
                                     ),
                                     true
                             );
+                            return;
                         }
+
+                        callback.onError(
+                                "실시간 번역 모델이 충분한 실제 번역문을 반환하지 못했어요."
+                        );
                     }
 
                     @Override
