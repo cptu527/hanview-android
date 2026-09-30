@@ -1,6 +1,7 @@
 package com.hanview.translate;
 
 import android.content.Context;
+import android.graphics.Color;
 import android.graphics.PixelFormat;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
@@ -112,13 +113,27 @@ public class TranslationPatchManager {
             view.setIncludeFontPadding(false);
             view.setLineSpacing(
                     vertical ? dp(1) : 0f,
-                    vertical ? 1.08f : 1.0f
+                    vertical ? 1.05f : 1.0f
             );
             view.setPadding(
-                    vertical ? dp(5) : dp(2),
-                    vertical ? dp(3) : 0,
-                    vertical ? dp(5) : dp(2),
-                    vertical ? dp(3) : 0
+                    vertical ? dp(4) : dp(2),
+                    vertical ? dp(2) : 0,
+                    vertical ? dp(4) : dp(2),
+                    vertical ? dp(2) : 0
+            );
+
+            boolean lightText =
+                    Color.red(block.textColor)
+                            + Color.green(block.textColor)
+                            + Color.blue(block.textColor)
+                            > 420;
+            view.setShadowLayer(
+                    1.2f * density,
+                    0f,
+                    0f,
+                    lightText
+                            ? Color.argb(220, 0, 0, 0)
+                            : Color.argb(220, 255, 255, 255)
             );
 
             int left =
@@ -138,14 +153,14 @@ public class TranslationPatchManager {
             if (vertical) {
                 int idealWidth =
                         Math.max(
-                                block.bounds.width() + dp(10),
-                                dp(82)
+                                block.bounds.width() + dp(8),
+                                dp(48)
                         );
 
                 idealWidth =
                         Math.min(
                                 idealWidth,
-                                dp(155)
+                                dp(108)
                         );
 
                 width =
@@ -156,8 +171,8 @@ public class TranslationPatchManager {
 
                 int extraHeight =
                         translated.length() > 34
-                                ? dp(22)
-                                : dp(10);
+                                ? dp(14)
+                                : dp(6);
 
                 height =
                         Math.min(
@@ -165,11 +180,11 @@ public class TranslationPatchManager {
                                 Math.max(
                                         block.bounds.height()
                                                 + extraHeight,
-                                        dp(52)
+                                        dp(44)
                                 )
                         );
 
-                view.setMaxLines(6);
+                view.setMaxLines(5);
             } else {
                 width =
                         Math.min(
@@ -224,10 +239,19 @@ public class TranslationPatchManager {
 
             GradientDrawable background =
                     new GradientDrawable();
+
+            int sampled = block.backgroundColor;
             background.setColor(
-                    block.backgroundColor
+                    Color.argb(
+                            72,
+                            Color.red(sampled),
+                            Color.green(sampled),
+                            Color.blue(sampled)
+                    )
             );
-            background.setCornerRadius(0f);
+            background.setCornerRadius(
+                    dp(3)
+            );
             view.setBackground(background);
 
             int type =
