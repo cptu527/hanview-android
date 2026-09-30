@@ -13,6 +13,7 @@ import android.view.View;
 import android.view.WindowManager;
 import android.widget.TextView;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 
 public class TranslationPatchManager {
@@ -39,27 +40,406 @@ public class TranslationPatchManager {
     public synchronized void show(List<OcrBlock> blocks, int screenWidth, int screenHeight) {
         clear();
         if (screenWidth <= 0 || screenHeight <= 0) return;
-        for (OcrBlock block : blocks) {
-            String text = block.translated == null ? "" : block.translated.trim();
-            if (text.isEmpty() || text.equals(block.original == null ? "" : block.original.trim())) continue;
-            boolean vertical = block.verticalSource || block.bounds.height() > block.bounds.width() * 1.8f;
-            TextView view = new TextView(context);
-            view.setText(text);
-            // A readable floor, without autosizing or silently dropping the end of a sentence.
-            view.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-            view.setTypeface(Typeface.DEFAULT, Typeface.NORMAL);
-            view.setIncludeFontPadding(true);
-            view.setLineSpacing(dp(1), 1.05f);
-            view.setGravity(vertical ? Gravity.CENTER : (Gravity.CENTER_VERTICAL | Gravity.START));
-            view.setPadding(dp(5), dp(4), dp(5), dp(4));
 
-            int sampled = block.backgroundColor;
-            int brightness = (Color.red(sampled) * 299 + Color.green(sampled) * 587
-                    + Color.blue(sampled) * 114) / 1000;
-            boolean light = brightness >= 145;
-            view.setTextColor(light ? Color.rgb(20, 20, 22) : Color.WHITE);
-            GradientDrawable background = new GradientDrawable();
-            // Match the sampled paper/bubble colour; opaque fill removes the original glyphs.
+        List<OcrBlock> translated =
+                new ArrayList<>();
+
+        int verticalCount = 0;
+
+        for (OcrBlock block : blocks) {
+            String text =
+                    block.translated == null
+                            ? ""
+                            : block.translated.trim();
+
+            String original =
+                    block.original == null
+                            ? ""
+                            : block.original.trim();
+
+            if (text.isEmpty()
+                    || text.equals(original)) {
+                continue;
+            }
+
+            translated.add(block);
+
+            if (block.verticalSource
+                    || block.bounds.height()
+                    > block.bounds.width() * 1.8f) {
+                verticalCount++;
+            }
+        }
+
+        if (translated.isEmpty()) {
+            return;
+        }
+
+        // Manga pages with several vertical paragraphs are unreadable when each
+        // Korean paragraph is painted on top of its source. Use one compact
+        // translation panel instead, preserving the artwork and the Japanese text.
+        if (verticalCount >= 2) {
+            showMangaPanel(
+                    translated,
+                    screenWidth,
+                    screenHeight
+            );
+            return;
+        }
+
+        showInlinePatches(
+                translated,
+                screenWidth,
+                screenHeight
+        );
+    }
+
+    private void showMangaPanel(
+            List<OcrBlock> blocks,
+            int screenWidth,
+            int screenHeight
+    ) {
+        List<OcrBlock> ordered =
+                new ArrayList<>(blocks);
+
+        ordered.sort(
+                (a, b) -> {
+                    boolean av =
+                            a.verticalSource
+                                    || a.bounds.height()
+                                    > a.bounds.width() * 1.8f;
+                    boolean bv =
+                            b.verticalSource
+                                    || b.bounds.height()
+                                    > b.bounds.width() * 1.8f;
+
+                    if (av && bv) {
+                        int byColumn =
+                                Integer.compare(
+                                        b.bounds.right,
+                                        a.bounds.right
+                                );
+
+                        if (byColumn != 0) {
+                            return byColumn;
+                        }
+                    }
+
+                    int byTop =
+                            Integer.compare(
+                                    a.bounds.top,
+                                    b.bounds.top
+                            );
+
+                    if (byTop != 0) {
+                        return byTop;
+                    }
+
+                    return Integer.compare(
+                            a.bounds.left,
+                            b.bounds.left
+                    );
+                }
+        );
+
+        StringBuilder body =
+                new StringBuilder();
+
+        int sourceTop =
+                Integer.MAX_VALUE;
+        int sourceBottom =
+                0;
+
+        for (OcrBlock block : ordered) {
+            String text =
+                    block.translated == null
+                            ? ""
+                            : block.translated.trim();
+
+            if (text.isEmpty()) {
+                continue;
+            }
+
+            if (body.length() > 0) {
+                body.append("\n\n");
+            }
+
+            body.append(text);
+
+            sourceTop =
+                    Math.min(
+                            sourceTop,
+                            block.bounds.top
+                    );
+            sourceBottom =
+                    Math.max(
+                            sourceBottom,
+                            block.bounds.bottom
+                    );
+        }
+
+        if (body.length() == 0) {
+            return;
+        }
+
+        TextView view =
+                new TextView(context);
+
+        view.setText(
+                body.toString()
+        );
+        view.setTextColor(
+                Color.WHITE
+        );
+        view.setTextSize(
+                TypedValue.COMPLEX_UNIT_SP,
+                14
+        );
+        view.setTypeface(
+                Typeface.DEFAULT,
+                Typeface.NORMAL
+        );
+        view.setIncludeFontPadding(true);
+        view.setLineSpacing(
+                dp(2),
+                1.12f
+        );
+        view.setGravity(
+                Gravity.START
+        );
+        view.setPadding(
+                dp(14),
+                dp(12),
+                dp(14),
+                dp(12)
+        );
+
+        GradientDrawable background =
+                new GradientDrawable();
+
+        background.setColor(
+                Color.argb(
+                        225,
+                        15,
+                        16,
+                        18
+                )
+        );
+        background.setCornerRadius(
+                dp(10)
+        );
+
+        view.setBackground(
+                background
+        );
+
+        int margin =
+                dp(12);
+
+        int width =
+                Math.max(
+                        dp(220),
+                        screenWidth - margin * 2
+                );
+
+        int maxHeight =
+                Math.max(
+                        dp(120),
+                        Math.round(
+                                screenHeight * 0.38f
+                        )
+                );
+
+        float fontSp =
+                14f;
+
+        int measuredHeight;
+
+        while (true) {
+            view.setTextSize(
+                    TypedValue.COMPLEX_UNIT_SP,
+                    fontSp
+            );
+
+            view.measure(
+                    View.MeasureSpec.makeMeasureSpec(
+                            width,
+                            View.MeasureSpec.EXACTLY
+                    ),
+                    View.MeasureSpec.makeMeasureSpec(
+                            0,
+                            View.MeasureSpec.UNSPECIFIED
+                    )
+            );
+
+            measuredHeight =
+                    view.getMeasuredHeight();
+
+            if (measuredHeight <= maxHeight
+                    || fontSp <= 11f) {
+                break;
+            }
+
+            fontSp -= 0.5f;
+        }
+
+        int height =
+                Math.min(
+                        maxHeight,
+                        measuredHeight
+                );
+
+        int safeBottom =
+                screenHeight - dp(92);
+
+        int preferredBelow =
+                sourceBottom + dp(12);
+
+        int y;
+
+        if (preferredBelow + height
+                <= safeBottom) {
+            y = preferredBelow;
+        } else {
+            int preferredAbove =
+                    sourceTop
+                            - dp(12)
+                            - height;
+
+            if (preferredAbove
+                    >= dp(90)) {
+                y = preferredAbove;
+            } else {
+                y =
+                        Math.max(
+                                dp(90),
+                                safeBottom - height
+                        );
+            }
+        }
+
+        int type =
+                Build.VERSION.SDK_INT
+                        >= Build.VERSION_CODES.O
+                        ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                        : WindowManager.LayoutParams.TYPE_PHONE;
+
+        WindowManager.LayoutParams params =
+                new WindowManager.LayoutParams(
+                        width,
+                        height,
+                        type,
+                        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                                | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                                | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+                                | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                        PixelFormat.TRANSLUCENT
+                );
+
+        params.gravity =
+                Gravity.TOP | Gravity.START;
+        params.x =
+                margin;
+        params.y =
+                y;
+        params.alpha =
+                1f;
+
+        try {
+            windowManager.addView(
+                    view,
+                    params
+            );
+
+            patches.add(view);
+            patchBounds.add(
+                    new Rect(
+                            params.x,
+                            params.y,
+                            params.x + width,
+                            params.y + height
+                    )
+            );
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void showInlinePatches(
+            List<OcrBlock> blocks,
+            int screenWidth,
+            int screenHeight
+    ) {
+        for (OcrBlock block : blocks) {
+            String text =
+                    block.translated == null
+                            ? ""
+                            : block.translated.trim();
+
+            if (text.isEmpty()) {
+                continue;
+            }
+
+            boolean vertical =
+                    block.verticalSource
+                            || block.bounds.height()
+                            > block.bounds.width() * 1.8f;
+
+            TextView view =
+                    new TextView(context);
+
+            view.setText(text);
+            view.setTextSize(
+                    TypedValue.COMPLEX_UNIT_SP,
+                    13
+            );
+            view.setTypeface(
+                    Typeface.DEFAULT,
+                    Typeface.NORMAL
+            );
+            view.setIncludeFontPadding(true);
+            view.setLineSpacing(
+                    dp(1),
+                    1.05f
+            );
+            view.setGravity(
+                    vertical
+                            ? Gravity.CENTER
+                            : Gravity.CENTER_VERTICAL
+                            | Gravity.START
+            );
+            view.setPadding(
+                    dp(5),
+                    dp(4),
+                    dp(5),
+                    dp(4)
+            );
+
+            int sampled =
+                    block.backgroundColor;
+
+            int brightness =
+                    (
+                            Color.red(sampled) * 299
+                                    + Color.green(sampled) * 587
+                                    + Color.blue(sampled) * 114
+                    ) / 1000;
+
+            boolean light =
+                    brightness >= 145;
+
+            view.setTextColor(
+                    light
+                            ? Color.rgb(
+                            20,
+                            20,
+                            22
+                    )
+                            : Color.WHITE
+            );
+
+            GradientDrawable background =
+                    new GradientDrawable();
+
             background.setColor(
                     Color.argb(
                             232,
@@ -68,70 +448,94 @@ public class TranslationPatchManager {
                             Color.blue(sampled)
                     )
             );
-            background.setCornerRadius(dp(4));
-            view.setBackground(background);
+            background.setCornerRadius(
+                    dp(4)
+            );
 
-            int width;
-            if (vertical) {
-                width = Math.min(
-                        screenWidth,
-                        Math.max(
-                                dp(72),
-                                Math.min(
-                                        dp(118),
-                                        block.bounds.width() + dp(44)
-                                )
-                        )
-                );
-            } else {
-                width = Math.min(
-                        screenWidth,
-                        Math.max(
-                                dp(48),
-                                block.bounds.width() + dp(12)
-                        )
-                );
-            }
-            float scaledDensity = context.getResources().getDisplayMetrics().scaledDensity;
-            float sourcePx = vertical && block.sourceGlyphWidthPx > 0
-                    ? block.sourceGlyphWidthPx : block.sourceTextSizePx;
-            float fontSp = Math.max(13f, Math.min(17f, sourcePx / scaledDensity));
-            int sourceHeight = Math.max(dp(24), block.bounds.height() + dp(4));
-            // Fit inside the source paragraph first, preserving its centre and reading order.
-            // Stop at 12sp; grow the paragraph instead of reducing text to unreadable sizes.
-            while (true) {
-                view.setTextSize(TypedValue.COMPLEX_UNIT_SP, fontSp);
-                view.measure(View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
-                        View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
-                if (view.getMeasuredHeight() <= sourceHeight || fontSp <= 12f) break;
-                fontSp = Math.max(12f, fontSp - 0.5f);
-            }
-            int height = Math.max(sourceHeight, view.getMeasuredHeight());
-            if (height > screenHeight) {
-                width = Math.min(screenWidth, Math.max(width, dp(196)));
-                fontSp = Math.max(11f, fontSp - 1f);
-                view.setTextSize(TypedValue.COMPLEX_UNIT_SP, fontSp);
-                view.measure(View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
-                        View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
-                height = Math.min(screenHeight, Math.max(dp(28), view.getMeasuredHeight()));
-            }
+            view.setBackground(
+                    background
+            );
 
-            // Keep every translation anchored to its source. Moving a paragraph
-            // to a distant "free" area makes manga unreadable and can cover artwork/UI.
-            int left = Math.max(
-                    0,
+            int width =
                     Math.min(
-                            block.bounds.centerX() - width / 2,
-                            screenWidth - width
+                            screenWidth,
+                            Math.max(
+                                    dp(48),
+                                    block.bounds.width()
+                                            + dp(
+                                            vertical
+                                                    ? 24
+                                                    : 12
+                                    )
+                            )
+                    );
+
+            float scaledDensity =
+                    context
+                            .getResources()
+                            .getDisplayMetrics()
+                            .scaledDensity;
+
+            float sourcePx =
+                    vertical
+                            && block.sourceGlyphWidthPx > 0
+                            ? block.sourceGlyphWidthPx
+                            : block.sourceTextSizePx;
+
+            float fontSp =
+                    Math.max(
+                            12f,
+                            Math.min(
+                                    16f,
+                                    sourcePx
+                                            / scaledDensity
+                            )
+                    );
+
+            view.setTextSize(
+                    TypedValue.COMPLEX_UNIT_SP,
+                    fontSp
+            );
+
+            view.measure(
+                    View.MeasureSpec.makeMeasureSpec(
+                            width,
+                            View.MeasureSpec.EXACTLY
+                    ),
+                    View.MeasureSpec.makeMeasureSpec(
+                            0,
+                            View.MeasureSpec.UNSPECIFIED
                     )
             );
-            int top = Math.max(
-                    0,
-                    Math.min(
-                            block.bounds.top - dp(2),
-                            screenHeight - height
-                    )
-            );
+
+            int height =
+                    Math.max(
+                            dp(28),
+                            Math.min(
+                                    screenHeight,
+                                    view.getMeasuredHeight()
+                            )
+                    );
+
+            int left =
+                    Math.max(
+                            0,
+                            Math.min(
+                                    block.bounds.centerX()
+                                            - width / 2,
+                                    screenWidth - width
+                            )
+                    );
+
+            int top =
+                    Math.max(
+                            0,
+                            Math.min(
+                                    block.bounds.top,
+                                    screenHeight - height
+                            )
+                    );
+
             Rect placement =
                     new Rect(
                             left,
@@ -139,23 +543,46 @@ public class TranslationPatchManager {
                             left + width,
                             top + height
                     );
-            int type = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
-                    ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-                    : WindowManager.LayoutParams.TYPE_PHONE;
-            WindowManager.LayoutParams params = new WindowManager.LayoutParams(width, height, type,
-                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-                    | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
-                    | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
-                    | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS, PixelFormat.TRANSLUCENT);
-            params.gravity = Gravity.TOP | Gravity.START;
-            params.x = placement.left;
-            params.y = placement.top;
-            params.alpha = 1f;
+
+            int type =
+                    Build.VERSION.SDK_INT
+                            >= Build.VERSION_CODES.O
+                            ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                            : WindowManager.LayoutParams.TYPE_PHONE;
+
+            WindowManager.LayoutParams params =
+                    new WindowManager.LayoutParams(
+                            width,
+                            height,
+                            type,
+                            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                                    | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                                    | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+                                    | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                            PixelFormat.TRANSLUCENT
+                    );
+
+            params.gravity =
+                    Gravity.TOP | Gravity.START;
+            params.x =
+                    placement.left;
+            params.y =
+                    placement.top;
+            params.alpha =
+                    1f;
+
             try {
-                windowManager.addView(view, params);
+                windowManager.addView(
+                        view,
+                        params
+                );
+
                 patches.add(view);
-                patchBounds.add(placement);
-            } catch (Exception ignored) { }
+                patchBounds.add(
+                        placement
+                );
+            } catch (Exception ignored) {
+            }
         }
     }
 
