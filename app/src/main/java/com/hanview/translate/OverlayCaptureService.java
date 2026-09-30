@@ -30,6 +30,7 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowManager;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import com.google.mlkit.vision.common.InputImage;
 import com.google.mlkit.vision.text.Text;
@@ -120,9 +121,12 @@ public class OverlayCaptureService extends Service {
         windowManager =
                 (WindowManager) getSystemService(WINDOW_SERVICE);
 
+        // Keep OCR memory bounded. We do NOT run several heavy recognizers
+        // over the same full-screen bitmap at the same time.
+        // 0 Japanese (also handles Latin), 1 Chinese, 2 Latin fallback.
         recognizers.add(
                 TextRecognition.getClient(
-                        TextRecognizerOptions.DEFAULT_OPTIONS
+                        new JapaneseTextRecognizerOptions.Builder().build()
                 )
         );
         recognizers.add(
@@ -132,12 +136,7 @@ public class OverlayCaptureService extends Service {
         );
         recognizers.add(
                 TextRecognition.getClient(
-                        new JapaneseTextRecognizerOptions.Builder().build()
-                )
-        );
-        recognizers.add(
-                TextRecognition.getClient(
-                        new DevanagariTextRecognizerOptions.Builder().build()
+                        TextRecognizerOptions.DEFAULT_OPTIONS
                 )
         );
 
@@ -187,29 +186,41 @@ public class OverlayCaptureService extends Service {
             return START_NOT_STICKY;
         }
 
-        startAsForeground();
+        try {
+            startAsForeground();
 
-        if (mediaProjection == null) {
-            startProjection(
-                    resultCode,
-                    resultData
+            if (mediaProjection == null) {
+                startProjection(
+                        resultCode,
+                        resultData
+                );
+
+                liveEnabled = true;
+                liveGeneration++;
+                latestFrameId++;
+
+                showTranslationOverlay();
+                showBubble();
+
+                captureHandler.removeCallbacks(liveLoop);
+                captureHandler.postDelayed(
+                        liveLoop,
+                        120L
+                );
+            }
+
+            return START_STICKY;
+        } catch (Throwable startupError) {
+            mainHandler.post(() ->
+                    Toast.makeText(
+                            this,
+                            "실시간 번역 실행 중 오류가 발생했어요. 다시 시작해 주세요.",
+                            Toast.LENGTH_LONG
+                    ).show()
             );
-
-            liveEnabled = true;
-            liveGeneration++;
-            latestFrameId++;
-
-            showTranslationOverlay();
-            showBubble();
-
-            captureHandler.removeCallbacks(liveLoop);
-            captureHandler.postDelayed(
-                    liveLoop,
-                    90L
-            );
+            stopSelf();
+            return START_NOT_STICKY;
         }
-
-        return START_STICKY;
     }
 
     private void startAsForeground() {
@@ -334,7 +345,7 @@ public class OverlayCaptureService extends Service {
                         captureWidth,
                         captureHeight,
                         PixelFormat.RGBA_8888,
-                        2
+                        1
                 );
 
         imageReader.setOnImageAvailableListener(
@@ -377,9 +388,18 @@ public class OverlayCaptureService extends Service {
                                 generation,
                                 frameId
                         );
-                    } catch (Exception ignored) {
+                    } catch (Throwable ignored) {
                         captureRequested = false;
                         processing = false;
+
+                        mainHandler.post(() -> {
+                            if (translationOverlay != null
+                                    && liveEnabled) {
+                                translationOverlay.setVisibility(
+                                        View.VISIBLE
+                                );
+                            }
+                        });
                     } finally {
                         if (image != null) {
                             image.close();
@@ -462,87 +482,207 @@ public class OverlayCaptureService extends Service {
                         0
                 );
 
-        int[] primaryIndexes =
-                new int[]{0, 1, 2};
-
-        AtomicInteger remaining =
-                new AtomicInteger(
-                        primaryIndexes.length
-                );
-
         List<OcrBlock> candidates =
-                Collections.synchronizedList(
-                        new ArrayList<>()
-                );
+                new ArrayList<>();
 
-        for (int index : primaryIndexes) {
-            TextRecognizer recognizer =
-                    recognizers.get(index);
+        // Japanese OCR first: it is the important path for manga and also
+        // recognizes Latin text. If the result is Han-only, run Chinese next
+        // for better simplified-Chinese accuracy. Latin is the final fallback.
+        recognizers.get(0)
+                .process(input)
+                .addOnSuccessListener(text -> {
+                    mergeCandidates(
+                            candidates,
+                            extractForeignLines(text)
+                    );
+                })
+                .addOnCompleteListener(task -> {
+                    if (!isCurrent(
+                            generation,
+                            frameId
+                    )) {
+                        processing = false;
+                        safeRecycle(bitmap);
+                        return;
+                    }
 
-            recognizer.process(input)
-                    .addOnSuccessListener(text -> {
-                        List<OcrBlock> found =
-                                extractForeignLines(text);
+                    if (containsKana(candidates)
+                            || containsLatinWithoutHan(candidates)) {
+                        finishAndRecycle(
+                                candidates,
+                                generation,
+                                frameId,
+                                bitmap
+                        );
+                        return;
+                    }
 
-                        synchronized (candidates) {
-                            for (OcrBlock block : found) {
-                                addOrReplaceOverlapping(
-                                        candidates,
-                                        block
-                                );
-                            }
-                        }
-                    })
-                    .addOnCompleteListener(task -> {
-                        if (remaining.decrementAndGet() != 0) {
-                            return;
-                        }
-
-                        if (!candidates.isEmpty()) {
-                            finishRecognition(
-                                    candidates,
-                                    generation,
-                                    frameId,
-                                    bitmap
-                            );
-                        } else {
-                            runDevanagariFallback(
-                                    input,
-                                    bitmap,
-                                    generation,
-                                    frameId
-                            );
-                            return;
-                        }
-
-                        bitmap.recycle();
-                    });
-        }
+                    runChinesePass(
+                            input,
+                            bitmap,
+                            candidates,
+                            generation,
+                            frameId
+                    );
+                });
     }
 
-    private void runDevanagariFallback(
+    private void runChinesePass(
             InputImage input,
             Bitmap bitmap,
+            List<OcrBlock> candidates,
             int generation,
             long frameId
     ) {
-        TextRecognizer recognizer =
-                recognizers.get(3);
+        recognizers.get(1)
+                .process(input)
+                .addOnSuccessListener(text -> {
+                    mergeCandidates(
+                            candidates,
+                            extractForeignLines(text)
+                    );
+                })
+                .addOnCompleteListener(task -> {
+                    if (!isCurrent(
+                            generation,
+                            frameId
+                    )) {
+                        processing = false;
+                        safeRecycle(bitmap);
+                        return;
+                    }
 
-        recognizer.process(input)
-                .addOnSuccessListener(text ->
-                        finishRecognition(
-                                extractForeignLines(text),
+                    if (!candidates.isEmpty()) {
+                        finishAndRecycle(
+                                candidates,
+                                generation,
+                                frameId,
+                                bitmap
+                        );
+                        return;
+                    }
+
+                    runLatinFallback(
+                            input,
+                            bitmap,
+                            candidates,
+                            generation,
+                            frameId
+                    );
+                });
+    }
+
+    private void runLatinFallback(
+            InputImage input,
+            Bitmap bitmap,
+            List<OcrBlock> candidates,
+            int generation,
+            long frameId
+    ) {
+        recognizers.get(2)
+                .process(input)
+                .addOnSuccessListener(text -> {
+                    mergeCandidates(
+                            candidates,
+                            extractForeignLines(text)
+                    );
+                })
+                .addOnCompleteListener(task ->
+                        finishAndRecycle(
+                                candidates,
                                 generation,
                                 frameId,
                                 bitmap
                         )
-                )
-                .addOnCompleteListener(task -> {
-                    if (!bitmap.isRecycled()) {
-                        bitmap.recycle();
-                    }
-                });
+                );
+    }
+
+    private void mergeCandidates(
+            List<OcrBlock> target,
+            List<OcrBlock> found
+    ) {
+        for (OcrBlock block : found) {
+            addOrReplaceOverlapping(
+                    target,
+                    block
+            );
+        }
+    }
+
+    private boolean containsKana(
+            List<OcrBlock> blocks
+    ) {
+        for (OcrBlock block : blocks) {
+            String value = block.original;
+            if (value == null) continue;
+
+            for (int i = 0; i < value.length(); i++) {
+                char c = value.charAt(i);
+                if (c >= '\u3040'
+                        && c <= '\u30FF') {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private boolean containsLatinWithoutHan(
+            List<OcrBlock> blocks
+    ) {
+        boolean latin = false;
+
+        for (OcrBlock block : blocks) {
+            String value = block.original;
+            if (value == null) continue;
+
+            for (int i = 0; i < value.length(); i++) {
+                char c = value.charAt(i);
+
+                if ((c >= '\u3400' && c <= '\u4DBF')
+                        || (c >= '\u4E00' && c <= '\u9FFF')) {
+                    return false;
+                }
+
+                if ((c >= 'A' && c <= 'Z')
+                        || (c >= 'a' && c <= 'z')
+                        || (c >= '\u00C0' && c <= '\u024F')) {
+                    latin = true;
+                }
+            }
+        }
+
+        return latin;
+    }
+
+    private void finishAndRecycle(
+            List<OcrBlock> candidates,
+            int generation,
+            long frameId,
+            Bitmap bitmap
+    ) {
+        try {
+            finishRecognition(
+                    candidates,
+                    generation,
+                    frameId,
+                    bitmap
+            );
+        } catch (Throwable ignored) {
+            processing = false;
+        } finally {
+            safeRecycle(bitmap);
+        }
+    }
+
+    private void safeRecycle(
+            Bitmap bitmap
+    ) {
+        if (bitmap != null
+                && !bitmap.isRecycled()) {
+            bitmap.recycle();
+        }
     }
 
     private void finishRecognition(
@@ -915,22 +1055,34 @@ public class OverlayCaptureService extends Service {
         int left =
                 Math.max(
                         0,
-                        r.left - margin
+                        Math.min(
+                                screenshot.getWidth() - 1,
+                                r.left - margin
+                        )
                 );
         int top =
                 Math.max(
                         0,
-                        r.top - margin
+                        Math.min(
+                                screenshot.getHeight() - 1,
+                                r.top - margin
+                        )
                 );
         int right =
-                Math.min(
-                        screenshot.getWidth() - 1,
-                        r.right + margin
+                Math.max(
+                        left,
+                        Math.min(
+                                screenshot.getWidth() - 1,
+                                r.right + margin
+                        )
                 );
         int bottom =
-                Math.min(
-                        screenshot.getHeight() - 1,
-                        r.bottom + margin
+                Math.max(
+                        top,
+                        Math.min(
+                                screenshot.getHeight() - 1,
+                                r.bottom + margin
+                        )
                 );
 
         java.util.HashMap<Integer, Integer> bins =
