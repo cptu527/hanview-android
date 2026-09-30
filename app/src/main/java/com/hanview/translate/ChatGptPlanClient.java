@@ -2093,22 +2093,32 @@ public class ChatGptPlanClient {
                         ? ""
                         : value.trim();
 
-        if (!trimmed.startsWith(
-                "```"
-        )) {
+        if (!trimmed.startsWith("```")) {
             return trimmed;
         }
 
-        trimmed =
-                trimmed.replaceFirst(
-                        "^\\`\\`\\`(?:json)?\\s*",
-                        ""
-                );
+        int firstNewline =
+                trimmed.indexOf('\n');
 
-        return trimmed.replaceFirst(
-                "\\s*\\`\\`\\`$",
-                ""
-        ).trim();
+        if (firstNewline >= 0) {
+            trimmed =
+                    trimmed.substring(
+                            firstNewline + 1
+                    );
+        } else {
+            trimmed =
+                    trimmed.substring(3);
+        }
+
+        if (trimmed.endsWith("```")) {
+            trimmed =
+                    trimmed.substring(
+                            0,
+                            trimmed.length() - 3
+                    );
+        }
+
+        return trimmed.trim();
     }
 
     private static String readAll(
