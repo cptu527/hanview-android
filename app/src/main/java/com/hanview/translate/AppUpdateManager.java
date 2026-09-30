@@ -3,6 +3,7 @@ package com.hanview.translate;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.DownloadManager;
+import android.database.Cursor;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
@@ -10,6 +11,7 @@ import android.content.IntentFilter;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Environment;
+import android.os.SystemClock;
 import android.provider.Settings;
 import android.widget.Toast;
 
@@ -217,7 +219,9 @@ public class AppUpdateManager {
             request.setDestinationInExternalFilesDir(
                     activity,
                     Environment.DIRECTORY_DOWNLOADS,
-                    "viewnyang-update.apk"
+                    "viewnyang-update-"
+                            + System.currentTimeMillis()
+                            + ".apk"
             );
 
             pendingDownloadId = downloadManager.enqueue(request);
@@ -226,6 +230,15 @@ public class AppUpdateManager {
                     .edit()
                     .putLong(KEY_PENDING_DOWNLOAD_ID, pendingDownloadId)
                     .apply();
+
+            final long downloadId =
+                    pendingDownloadId;
+
+            executor.execute(() ->
+                    waitForDownloadAndInstall(
+                            downloadId
+                    )
+            );
 
             Toast.makeText(
                     activity,
@@ -238,6 +251,65 @@ public class AppUpdateManager {
                     "업데이트 다운로드를 시작하지 못했어요.",
                     Toast.LENGTH_LONG
             ).show();
+        }
+    }
+
+    private void waitForDownloadAndInstall(
+            long downloadId
+    ) {
+        DownloadManager.Query query =
+                new DownloadManager.Query()
+                        .setFilterById(
+                                downloadId
+                        );
+
+        while (!executor.isShutdown()) {
+            try (Cursor cursor =
+                         downloadManager.query(query)) {
+                if (cursor != null
+                        && cursor.moveToFirst()) {
+                    int statusIndex =
+                            cursor.getColumnIndex(
+                                    DownloadManager.COLUMN_STATUS
+                            );
+
+                    if (statusIndex >= 0) {
+                        int status =
+                                cursor.getInt(
+                                        statusIndex
+                                );
+
+                        if (status
+                                == DownloadManager.STATUS_SUCCESSFUL) {
+                            activity.runOnUiThread(() -> {
+                                if (pendingDownloadId
+                                        == downloadId) {
+                                    openInstaller(
+                                            downloadId
+                                    );
+                                }
+                            });
+                            return;
+                        }
+
+                        if (status
+                                == DownloadManager.STATUS_FAILED) {
+                            activity.runOnUiThread(() ->
+                                    Toast.makeText(
+                                            activity,
+                                            "업데이트 다운로드에 실패했어요. 다시 시도해 주세요.",
+                                            Toast.LENGTH_LONG
+                                    ).show()
+                            );
+                            return;
+                        }
+                    }
+                }
+            } catch (Exception ignored) {
+                return;
+            }
+
+            SystemClock.sleep(500L);
         }
     }
 
