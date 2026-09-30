@@ -195,22 +195,32 @@ class LocalContextTranslator(
         val items = JSONArray()
 
         ordered.forEachIndexed { index, block ->
-            items.put(
-                JSONObject()
-                    .put("id", block.id)
-                    .put("reading_order", index)
-                    .put("vertical", block.verticalSource)
-                    .put("text", block.original)
-            )
+            val item = JSONObject()
+                .put("id", block.id)
+                .put("reading_order", index)
+                .put("vertical", block.verticalSource)
+                .put("source_ja", block.original)
+
+            val draft = block.translated?.trim().orEmpty()
+            if (draft.isNotEmpty()
+                && draft != block.original.trim()
+            ) {
+                item.put("draft_ko", draft)
+            }
+
+            items.put(item)
         }
 
         val root = JSONObject()
             .put(
                 "task",
-                "Translate each Japanese manga item into fluent natural Korean. " +
-                        "Preserve each item id and reading order. Use nearby items and previous page context " +
-                        "only to resolve omitted subjects, relationships, tone and honorifics. " +
-                        "Do not add explanations or merge unrelated items."
+                "Act as a professional Japanese-to-Korean manga localizer. " +
+                        "For each item, source_ja is authoritative and draft_ko is only a rough machine draft. " +
+                        "Correct any mistranslation in the draft, then rewrite it into fluent Korean dialogue/prose " +
+                        "that sounds as if it was originally written in Korean. Preserve each id and reading order. " +
+                        "Use nearby items and previous_page_context to resolve omitted subjects, who is speaking to whom, " +
+                        "honorifics, emotional tone and consistent speech level. Keep the meaning faithful; do not summarize, " +
+                        "explain, sanitize, merge unrelated items, or invent details."
             )
             .put("items", items)
 
