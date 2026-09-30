@@ -986,19 +986,32 @@ public class OverlayCaptureService extends Service {
                     if (!liveEnabled || !displayGate.isVisible() || !displayGate.canDisplay(frameGeneration)) return;
                     translationPending = false;
                     long now = SystemClock.uptimeMillis();
-                    translationRetryAfterMs = now + 2500L;
+                    boolean hardUsageLimit =
+                            message != null
+                                    && message.contains("플랜 공유 사용 한도");
+
+                    translationRetryAfterMs =
+                            hardUsageLimit
+                                    ? Long.MAX_VALUE
+                                    : now + 2500L;
                     cleanCaptureRequested = false;
-                    if (bubble != null) bubble.setText("!");
+                    if (bubble != null) {
+                        bubble.setText(
+                                hardUsageLimit
+                                        ? "한도"
+                                        : "!"
+                        );
+                    }
 
                     if (now - lastErrorToastMs >= 15000L) {
                         lastErrorToastMs = now;
                         Toast.makeText(OverlayCaptureService.this, message, Toast.LENGTH_LONG).show();
                     }
 
-                    // A temporary ChatGPT/network error must not leave live translation
-                    // looking dead. Keep the projection/service alive and automatically
-                    // request a fresh clean frame after a short cooldown.
-                    if (captureHandler != null) {
+                    // Temporary transport/availability failures retry automatically.
+                    // A real plan-sharing limit pauses requests so the app does not
+                    // hammer the endpoint; tapping OFF -> ON manually retries later.
+                    if (!hardUsageLimit && captureHandler != null) {
                         captureHandler.postDelayed(() -> {
                             if (!liveEnabled
                                     || !displayGate.isVisible()
