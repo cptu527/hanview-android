@@ -76,9 +76,11 @@ public class OverlayCaptureService extends Service {
 
     private final List<TextRecognizer> recognizers = new ArrayList<>();
     private TranslationEngine translationEngine;
+    private ChatGptPlanClient gptVisionClient;
 
     private volatile boolean liveEnabled = false;
     private volatile boolean captureRequested = false;
+    private volatile long captureRequestedAtMs = 0L;
     private volatile boolean processing = false;
     private volatile boolean translationPending = false;
     private final TranslationDisplayGate displayGate = new TranslationDisplayGate();
@@ -116,6 +118,7 @@ public class OverlayCaptureService extends Service {
                     displayGate.invalidate();
                     translationPending = false;
                     if (translationEngine != null) translationEngine.cancelPending();
+        if (gptVisionClient != null) gptVisionClient.cancelTranslations();
                     captureRequested = false;
                     processing = false;
                     cleanCaptureRequested = true;
@@ -144,6 +147,19 @@ public class OverlayCaptureService extends Service {
                         LIVE_INTERVAL_MS
                 );
                 return;
+            }
+
+            if (captureRequested
+                    && captureRequestedAtMs > 0L
+                    && SystemClock.uptimeMillis()
+                    - captureRequestedAtMs > 1500L) {
+                // A capture request can occasionally be issued before the
+                // virtual display has delivered its first frame. Never allow
+                // that one missed frame to freeze live translation forever.
+                captureRequested = false;
+                captureRequestedAtMs = 0L;
+                processing = false;
+                cleanCaptureRequested = true;
             }
 
             if (!processing && !captureRequested) {
@@ -182,6 +198,7 @@ public class OverlayCaptureService extends Service {
         );
 
         translationEngine = new TranslationEngine(this);
+        gptVisionClient = new ChatGptPlanClient(this);
 
         captureThread = new HandlerThread("viewnyang-live-capture");
         captureThread.start();
@@ -369,6 +386,7 @@ public class OverlayCaptureService extends Service {
                         }
 
                         captureRequested = false;
+                        captureRequestedAtMs = 0L;
                         processing = true;
 
                         final int frameGeneration = displayGate.current();
@@ -388,6 +406,7 @@ public class OverlayCaptureService extends Service {
                         }
                     } catch (Throwable ignored) {
                         captureRequested = false;
+                        captureRequestedAtMs = 0L;
                         processing = false;
                         cleanCaptureRequested = true;
 
@@ -430,6 +449,8 @@ public class OverlayCaptureService extends Service {
                 && (patchManager == null || !patchManager.hasPatches());
 
         captureRequested = true;
+        captureRequestedAtMs =
+                SystemClock.uptimeMillis();
     }
 
     private void handleMonitorFrame(
@@ -479,6 +500,7 @@ public class OverlayCaptureService extends Service {
         translationPending = false;
         translationRetryAfterMs = 0L;
         if (translationEngine != null) translationEngine.cancelPending();
+        if (gptVisionClient != null) gptVisionClient.cancelTranslations();
         lastMonitorFingerprint = null;
         activePatchBounds.clear();
         cleanCaptureRequested = true;
@@ -665,6 +687,172 @@ public class OverlayCaptureService extends Service {
     }
 
     private void processBitmap(
+            Bitmap bitmap,
+            int frameGeneration
+    ) {
+        if (gptVisionClient != null
+                && gptVisionClient.hasPlanAccess()) {
+            processBitmapWithGpt(
+                    bitmap,
+                    frameGeneration
+            );
+            return;
+        }
+
+        processBitmapLocal(
+                bitmap,
+                frameGeneration
+        );
+    }
+
+    private void processBitmapWithGpt(
+            Bitmap bitmap,
+            int frameGeneration
+    ) {
+        if (!isCurrentGeneration(
+                frameGeneration
+        )) {
+            safeRecycle(bitmap);
+            processing = false;
+            return;
+        }
+
+        translationPending = true;
+        processing = false;
+
+        lastMonitorFingerprint =
+                makeFingerprint(
+                        bitmap,
+                        Collections.emptyList()
+                );
+
+        mainHandler.post(() -> {
+            if (bubble != null
+                    && isCurrentGeneration(
+                    frameGeneration
+            )) {
+                bubble.setText("GPT…");
+            }
+        });
+
+        gptVisionClient.translateImage(
+                bitmap,
+                new ChatGptPlanClient.VisionTranslationCallback() {
+                    @Override
+                    public void onSuccess(
+                            String pageText,
+                            String model
+                    ) {
+                        if (!isCurrentGeneration(
+                                frameGeneration
+                        )) {
+                            safeRecycle(bitmap);
+                            return;
+                        }
+
+                        OcrBlock page =
+                                new OcrBlock(
+                                        0,
+                                        "GPT vision page",
+                                        new Rect(
+                                                0,
+                                                Math.round(
+                                                        captureHeight
+                                                                * 0.30f
+                                                ),
+                                                captureWidth,
+                                                Math.round(
+                                                        captureHeight
+                                                                * 0.68f
+                                                )
+                                        )
+                                );
+
+                        page.translated =
+                                pageText == null
+                                        ? ""
+                                        : pageText.trim();
+                        page.pageTranslation = true;
+                        page.verticalSource = true;
+
+                        List<OcrBlock> translated =
+                                new ArrayList<>();
+                        translated.add(page);
+
+                        mainHandler.post(() -> {
+                            if (!isCurrentGeneration(
+                                    frameGeneration
+                            )) {
+                                safeRecycle(bitmap);
+                                return;
+                            }
+
+                            if (patchManager != null) {
+                                patchManager.show(
+                                        translated,
+                                        captureWidth,
+                                        captureHeight
+                                );
+                                activePatchBounds.clear();
+                                activePatchBounds.addAll(
+                                        patchManager.getPatchBounds()
+                                );
+                            }
+
+                            boolean visible =
+                                    patchManager != null
+                                            && patchManager.hasPatches();
+
+                            translationPending = false;
+                            cleanCaptureRequested =
+                                    !visible;
+
+                            if (bubble != null) {
+                                bubble.setText(
+                                        visible
+                                                ? "GPT"
+                                                : "!"
+                                );
+                            }
+
+                            safeRecycle(bitmap);
+                        });
+                    }
+
+                    @Override
+                    public void onError(
+                            String message
+                    ) {
+                        if (!isCurrentGeneration(
+                                frameGeneration
+                        )) {
+                            safeRecycle(bitmap);
+                            return;
+                        }
+
+                        // Keep translation usable if ChatGPT is temporarily
+                        // unavailable or the plan-sharing limit is reached.
+                        translationPending = false;
+
+                        mainHandler.post(() -> {
+                            if (bubble != null
+                                    && isCurrentGeneration(
+                                    frameGeneration
+                            )) {
+                                bubble.setText("OCR…");
+                            }
+                        });
+
+                        processBitmapLocal(
+                                bitmap,
+                                frameGeneration
+                        );
+                    }
+                }
+        );
+    }
+
+    private void processBitmapLocal(
             Bitmap bitmap,
             int frameGeneration
     ) {
@@ -2045,7 +2233,9 @@ public class OverlayCaptureService extends Service {
         translationPending = false;
         translationRetryAfterMs = 0L;
         if (translationEngine != null) translationEngine.cancelPending();
+        if (gptVisionClient != null) gptVisionClient.cancelTranslations();
         captureRequested = false;
+        captureRequestedAtMs = 0L;
         processing = false;
         cleanCaptureRequested = true;
         lastMonitorFingerprint = null;
@@ -2088,7 +2278,9 @@ public class OverlayCaptureService extends Service {
         translationPending = false;
         translationRetryAfterMs = 0L;
         if (translationEngine != null) translationEngine.cancelPending();
+        if (gptVisionClient != null) gptVisionClient.cancelTranslations();
         captureRequested = false;
+        captureRequestedAtMs = 0L;
         processing = false;
         cleanCaptureRequested = true;
         lastMonitorFingerprint = null;
