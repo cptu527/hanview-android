@@ -8,7 +8,7 @@ android {
 
     defaultConfig {
         applicationId = "com.viewnyang.app"
-        minSdk = 23
+        minSdk = 24
         targetSdk = 37
         versionCode = 57
         versionName = "0.6.2"
@@ -51,4 +51,6 @@ dependencies {
     implementation("com.google.mlkit:language-id:17.0.6")
     implementation("com.google.mlkit:translate:17.0.3")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("com.google.ai.edge.litertlm:litertlm-android:0.16.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
 }
