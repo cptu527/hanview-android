@@ -73,7 +73,6 @@ public class MainActivity extends Activity {
                     }
                 }
         );
-        TranslationEngine.prewarmCommon(this);
         setContentView(buildUi());
         requestNotificationPermissionIfNeeded();
 
