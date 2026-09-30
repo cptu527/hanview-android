@@ -60,11 +60,8 @@ public class TranslationEngine {
 
     public TranslationEngine(Context context) {
         this.context = context.getApplicationContext();
-
-        // Warm the most common models in the background as soon as live mode starts.
-        warmUp("zh");
-        warmUp("en");
-        warmUp("ja");
+        // Load only the model needed for the language currently on screen.
+        // This avoids allocating several translation models beside OCR at once.
     }
 
     public static void prewarmCommon(Context context) {
