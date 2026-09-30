@@ -20,6 +20,7 @@ import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 class LocalContextTranslator(
     context: Context
@@ -40,8 +41,29 @@ class LocalContextTranslator(
     private val engineMutex = Mutex()
     @Volatile private var engine: Engine? = null
     private val closed = AtomicBoolean(false)
+    private val requestSequence = AtomicInteger(0)
+    @Volatile private var previousPageContext: String = ""
 
     fun isReady(): Boolean = isModelReady(appContext)
+
+    fun cancelPending() {
+        requestSequence.incrementAndGet()
+    }
+
+    fun resetContext() {
+        previousPageContext = ""
+    }
+
+    fun warmUp() {
+        if (!isReady() || closed.get()) return
+
+        scope.launch {
+            try {
+                ensureEngine()
+            } catch (_: Throwable) {
+            }
+        }
+    }
 
     fun translate(
         blocks: List<OcrBlock>,
@@ -51,6 +73,8 @@ class LocalContextTranslator(
             callback.onError("로컬 문맥 모델이 아직 설치되지 않았어요.")
             return
         }
+
+        val sequence = requestSequence.incrementAndGet()
 
         val snapshot = blocks.map { block ->
             OcrBlock(
@@ -101,12 +125,26 @@ class LocalContextTranslator(
                     }
 
                 val parsed = parseResponse(responseText)
+
+                if (sequence != requestSequence.get()) {
+                    return@launch
+                }
+
                 if (parsed.isEmpty()) {
                     callback.onError("로컬 문맥 모델의 번역 결과를 읽지 못했어요.")
                 } else {
+                    previousPageContext =
+                        buildPreviousContext(
+                            snapshot,
+                            parsed
+                        )
                     callback.onSuccess(parsed)
                 }
             } catch (t: Throwable) {
+                if (sequence != requestSequence.get()) {
+                    return@launch
+                }
+
                 callback.onError(
                     t.message?.takeIf { it.isNotBlank() }
                         ?: "로컬 문맥 번역 중 오류가 발생했어요."
@@ -130,7 +168,7 @@ class LocalContextTranslator(
                 EngineConfig(
                     modelPath = file.absolutePath,
                     backend = Backend.CPU(),
-                    maxNumTokens = 2048,
+                    maxNumTokens = 4096,
                     cacheDir = appContext.cacheDir.absolutePath
                 )
             )
@@ -166,15 +204,62 @@ class LocalContextTranslator(
             )
         }
 
-        return JSONObject()
+        val root = JSONObject()
             .put(
                 "task",
-                "Translate each item from Japanese to natural Korean. " +
-                        "Use neighboring items only as context. " +
-                        "Do not merge items and do not add commentary."
+                "Translate each Japanese manga item into fluent natural Korean. " +
+                        "Preserve each item id and reading order. Use nearby items and previous page context " +
+                        "only to resolve omitted subjects, relationships, tone and honorifics. " +
+                        "Do not add explanations or merge unrelated items."
             )
             .put("items", items)
-            .toString()
+
+        val previous = previousPageContext.trim()
+        if (previous.isNotEmpty()) {
+            root.put(
+                "previous_page_context",
+                previous
+            )
+        }
+
+        return root.toString()
+    }
+
+    private fun buildPreviousContext(
+        blocks: List<OcrBlock>,
+        translations: Map<Int, String>
+    ): String {
+        val ordered = blocks.sortedWith { a, b ->
+            if (a.verticalSource && b.verticalSource) {
+                val column = b.bounds.right.compareTo(a.bounds.right)
+                if (column != 0) return@sortedWith column
+            }
+
+            val top = a.bounds.top.compareTo(b.bounds.top)
+            if (top != 0) top else a.bounds.left.compareTo(b.bounds.left)
+        }
+
+        val tail = ordered.takeLast(8)
+        val out = StringBuilder()
+
+        for (block in tail) {
+            val ko = translations[block.id]?.trim().orEmpty()
+            if (ko.isEmpty()) continue
+
+            if (out.isNotEmpty()) out.append("\n")
+            out.append("JA: ")
+                .append(block.original.replace("\n", " ").trim())
+                .append("\nKO: ")
+                .append(ko)
+                .append("\n")
+        }
+
+        val value = out.toString().trim()
+        return if (value.length <= 2200) {
+            value
+        } else {
+            value.takeLast(2200)
+        }
     }
 
     private fun parseResponse(
@@ -257,13 +342,15 @@ class LocalContextTranslator(
     companion object {
         private const val MODEL_DIR = "local_llm"
         private const val MODEL_NAME =
-            "Qwen3-1.7B_dynamic_wi4b32_afp32.litertlm"
+            "Qwen3.5-4B_mixed_int4.litertlm"
         private const val MODEL_URL =
-            "https://huggingface.co/litert-community/Qwen3-1.7B/resolve/main/" +
+            "https://huggingface.co/litert-community/Qwen3.5-4B/resolve/main/" +
                     MODEL_NAME + "?download=true"
-        private const val LEGACY_MODEL_NAME =
+        private val LEGACY_MODEL_NAMES = arrayOf(
+            "Qwen3-1.7B_dynamic_wi4b32_afp32.litertlm",
             "qwen3_0.6b_nothink_q4_block32_ekv1280.litertlm"
-        private const val MIN_MODEL_BYTES = 850_000_000L
+        )
+        private const val MIN_MODEL_BYTES = 2_300_000_000L
 
         @JvmStatic
         fun modelFile(context: Context): File {
@@ -288,6 +375,11 @@ class LocalContextTranslator(
             if (file.exists()) file.delete()
             val part = File(file.absolutePath + ".part")
             if (part.exists()) part.delete()
+
+            LEGACY_MODEL_NAMES.forEach { name ->
+                val legacy = File(file.parentFile, name)
+                if (legacy.exists()) legacy.delete()
+            }
         }
 
         @JvmStatic
@@ -374,11 +466,13 @@ class LocalContextTranslator(
                         part.delete()
                     }
 
-                    val legacy = File(
-                        target.parentFile,
-                        LEGACY_MODEL_NAME
-                    )
-                    if (legacy.exists()) legacy.delete()
+                    LEGACY_MODEL_NAMES.forEach { name ->
+                        val legacy = File(
+                            target.parentFile,
+                            name
+                        )
+                        if (legacy.exists()) legacy.delete()
+                    }
 
                     callback.onProgress(100)
                     callback.onSuccess()
