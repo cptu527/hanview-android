@@ -690,15 +690,8 @@ public class OverlayCaptureService extends Service {
             Bitmap bitmap,
             int frameGeneration
     ) {
-        if (gptVisionClient != null
-                && gptVisionClient.hasPlanAccess()) {
-            processBitmapWithGpt(
-                    bitmap,
-                    frameGeneration
-            );
-            return;
-        }
-
+        // Live translation is intentionally local-only. A connected ChatGPT
+        // account must never change the capture path or consume plan/API usage.
         processBitmapLocal(
                 bitmap,
                 frameGeneration
@@ -1100,15 +1093,20 @@ public class OverlayCaptureService extends Service {
                         )
         );
 
+        // Preserve OCR text-block boundaries. Aggressively merging neighboring
+        // vertical columns can join two different speech bubbles and corrupt the
+        // Japanese before the local language model ever sees it.
         blocks =
-                mergeVerticalColumns(blocks);
+                orderRecognizedBlocks(blocks);
 
         List<OcrBlock> normalized =
                 new ArrayList<>();
 
         for (OcrBlock old : blocks) {
             if (old.original == null
-                    || old.original.trim().length() < 2) {
+                    || old.original.trim().isEmpty()
+                    || (old.original.trim().length() < 2
+                    && !hasJapaneseOrHan(old.original))) {
                 continue;
             }
 
@@ -1301,6 +1299,76 @@ public class OverlayCaptureService extends Service {
                 });
             }
         });
+    }
+
+    private List<OcrBlock> orderRecognizedBlocks(
+            List<OcrBlock> source
+    ) {
+        List<OcrBlock> ordered =
+                new ArrayList<>(source);
+
+        ordered.sort(
+                (a, b) -> {
+                    boolean av =
+                            a.verticalSource
+                                    || a.bounds.height()
+                                    > a.bounds.width() * 1.6f;
+                    boolean bv =
+                            b.verticalSource
+                                    || b.bounds.height()
+                                    > b.bounds.width() * 1.6f;
+
+                    if (av && bv) {
+                        float overlap =
+                                verticalOverlapRatio(
+                                        a.bounds,
+                                        b.bounds
+                                );
+
+                        // Columns belonging to the same row/panel are read from
+                        // right to left. Far-apart rows remain top-to-bottom.
+                        if (overlap >= 0.20f
+                                || Math.abs(
+                                a.bounds.top
+                                        - b.bounds.top
+                        ) <= dp(28)) {
+                            int byX =
+                                    Integer.compare(
+                                            b.bounds.centerX(),
+                                            a.bounds.centerX()
+                                    );
+
+                            if (byX != 0) {
+                                return byX;
+                            }
+                        }
+                    }
+
+                    int byTop =
+                            Integer.compare(
+                                    a.bounds.top,
+                                    b.bounds.top
+                            );
+
+                    if (byTop != 0) {
+                        return byTop;
+                    }
+
+                    if (av && bv) {
+                        return Integer.compare(
+                                b.bounds.centerX(),
+                                a.bounds.centerX()
+                        );
+                    }
+
+                    return Integer.compare(
+                            a.bounds.left,
+                            b.bounds.left
+                    );
+                }
+        );
+
+        return ordered;
     }
 
     private List<OcrBlock> mergeVerticalColumns(
@@ -1633,56 +1701,278 @@ public class OverlayCaptureService extends Service {
     }
 
     private List<OcrBlock> extractForeignLines(Text result) {
-        List<OcrBlock> out = new ArrayList<>();
+        List<OcrBlock> out =
+                new ArrayList<>();
         int id = 0;
 
-        for (Text.TextBlock block : result.getTextBlocks()) {
-            for (Text.Line line : block.getLines()) {
+        for (Text.TextBlock textBlock : result.getTextBlocks()) {
+            List<Text.Line> eligible =
+                    new ArrayList<>();
+
+            for (Text.Line line : textBlock.getLines()) {
                 String value =
                         line.getText() == null
                                 ? ""
                                 : line.getText().trim();
-
-                Rect rect = line.getBoundingBox();
+                Rect rect =
+                        line.getBoundingBox();
 
                 if (rect == null
                         || value.isEmpty()
                         || !hasForeignLetters(value)
                         || isKoreanDominant(value)
-                        || isLikelyBrowserOrSystemUi(value, rect)) {
-                    continue;
-                }
-
-                if (rect.width() < dp(8)
+                        || isLikelyBrowserOrSystemUi(
+                        value,
+                        rect
+                )
+                        || rect.width() < dp(8)
                         || rect.height() < dp(8)) {
                     continue;
                 }
 
-                OcrBlock recognized =
-                        new OcrBlock(
-                                id++,
-                                value,
-                                rect
-                        );
+                eligible.add(line);
+            }
 
-                recognized.verticalSource =
-                        rect.height()
-                                > rect.width() * 1.8f;
+            if (eligible.isEmpty()) {
+                continue;
+            }
 
-                recognized.sourceGlyphWidthPx =
-                        recognized.verticalSource
-                                ? rect.width()
-                                : rect.height();
+            int verticalCount = 0;
+            Rect union = null;
 
-                out.add(recognized);
-
-                if (out.size() >= 80) {
-                    return out;
+            for (Text.Line line : eligible) {
+                Rect rect =
+                        line.getBoundingBox();
+                if (rect == null) {
+                    continue;
                 }
+
+                if (rect.height()
+                        > rect.width() * 1.45f) {
+                    verticalCount++;
+                }
+
+                if (union == null) {
+                    union = new Rect(rect);
+                } else {
+                    union.union(rect);
+                }
+            }
+
+            boolean mostlyVertical =
+                    verticalCount > 0
+                            && verticalCount * 2
+                            >= eligible.size();
+
+            boolean compactBlock =
+                    union != null
+                            && (
+                            captureWidth <= 0
+                                    || union.width()
+                                    <= Math.max(
+                                    dp(180),
+                                    Math.round(
+                                            captureWidth
+                                                    * 0.38f
+                                    )
+                            )
+                    );
+
+            // ML Kit already groups lines that belong to the same text block.
+            // For vertical manga, join columns only inside that OCR block and
+            // in right-to-left order. Do not merge unrelated blocks globally.
+            if (mostlyVertical
+                    && compactBlock
+                    && eligible.size() > 1) {
+                eligible.sort(
+                        (a, b) -> {
+                            Rect ar =
+                                    a.getBoundingBox();
+                            Rect br =
+                                    b.getBoundingBox();
+
+                            if (ar == null || br == null) {
+                                return 0;
+                            }
+
+                            int byX =
+                                    Integer.compare(
+                                            br.centerX(),
+                                            ar.centerX()
+                                    );
+
+                            if (byX != 0) {
+                                return byX;
+                            }
+
+                            return Integer.compare(
+                                    ar.top,
+                                    br.top
+                            );
+                        }
+                );
+
+                StringBuilder combined =
+                        new StringBuilder();
+                Rect bounds = null;
+                float glyphWidth =
+                        Float.MAX_VALUE;
+
+                for (Text.Line line : eligible) {
+                    Rect rect =
+                            line.getBoundingBox();
+                    if (rect == null) {
+                        continue;
+                    }
+
+                    String value =
+                            normalizeRecognizedText(
+                                    line.getText(),
+                                    true
+                            );
+
+                    if (!value.isEmpty()) {
+                        combined.append(value);
+                    }
+
+                    if (bounds == null) {
+                        bounds =
+                                new Rect(rect);
+                    } else {
+                        bounds.union(rect);
+                    }
+
+                    glyphWidth =
+                            Math.min(
+                                    glyphWidth,
+                                    Math.max(
+                                            1,
+                                            rect.width()
+                                    )
+                            );
+                }
+
+                if (bounds != null
+                        && combined.length() > 0) {
+                    OcrBlock recognized =
+                            new OcrBlock(
+                                    id++,
+                                    combined.toString(),
+                                    bounds
+                            );
+                    recognized.verticalSource =
+                            true;
+                    recognized.sourceGlyphWidthPx =
+                            glyphWidth == Float.MAX_VALUE
+                                    ? bounds.width()
+                                    : glyphWidth;
+                    out.add(recognized);
+                }
+            } else {
+                for (Text.Line line : eligible) {
+                    Rect rect =
+                            line.getBoundingBox();
+                    if (rect == null) {
+                        continue;
+                    }
+
+                    boolean vertical =
+                            rect.height()
+                                    > rect.width() * 1.45f;
+
+                    String value =
+                            normalizeRecognizedText(
+                                    line.getText(),
+                                    vertical
+                            );
+
+                    if (value.isEmpty()) {
+                        continue;
+                    }
+
+                    OcrBlock recognized =
+                            new OcrBlock(
+                                    id++,
+                                    value,
+                                    rect
+                            );
+
+                    recognized.verticalSource =
+                            vertical;
+                    recognized.sourceGlyphWidthPx =
+                            vertical
+                                    ? rect.width()
+                                    : rect.height();
+
+                    out.add(recognized);
+                }
+            }
+
+            if (out.size() >= 80) {
+                return out;
             }
         }
 
         return out;
+    }
+
+    private String normalizeRecognizedText(
+            String value,
+            boolean vertical
+    ) {
+        if (value == null) {
+            return "";
+        }
+
+        String cleaned =
+                value
+                        .replace("\n", "")
+                        .replace("\r", "")
+                        .replace("｡", "。")
+                        .replace("､", "、")
+                        .trim();
+
+        if (vertical) {
+            cleaned =
+                    cleaned.replaceAll(
+                            "\\s+",
+                            ""
+                    );
+        } else {
+            cleaned =
+                    cleaned.replaceAll(
+                            "\\s+",
+                            " "
+                    );
+        }
+
+        return cleaned;
+    }
+
+    private boolean hasJapaneseOrHan(
+            String value
+    ) {
+        if (value == null) {
+            return false;
+        }
+
+        for (int i = 0;
+             i < value.length();
+             i++) {
+            char c =
+                    value.charAt(i);
+
+            if ((c >= '\u3040'
+                    && c <= '\u30FF')
+                    || (c >= '\u3400'
+                    && c <= '\u4DBF')
+                    || (c >= '\u4E00'
+                    && c <= '\u9FFF')) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private boolean isLikelyBrowserOrSystemUi(

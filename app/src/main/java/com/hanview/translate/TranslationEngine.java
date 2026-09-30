@@ -342,16 +342,10 @@ public class TranslationEngine {
     private boolean shouldUseContextModel(
             List<OcrBlock> blocks
     ) {
-        int vertical = 0;
         int kana = 0;
+        int meaningfulChars = 0;
 
         for (OcrBlock block : blocks) {
-            if (block.verticalSource
-                    || block.bounds.height()
-                    > block.bounds.width() * 1.8f) {
-                vertical++;
-            }
-
             String value =
                     block.original;
 
@@ -365,6 +359,10 @@ public class TranslationEngine {
                 char ch =
                         value.charAt(i);
 
+                if (Character.isLetterOrDigit(ch)) {
+                    meaningfulChars++;
+                }
+
                 if (ch >= 0x3040
                         && ch <= 0x30FF) {
                     kana++;
@@ -372,8 +370,11 @@ public class TranslationEngine {
             }
         }
 
-        return vertical >= 2
-                && kana >= 2;
+        // Once the page has a real Japanese signal, use the 4B model even for
+        // one bubble or horizontal Japanese. Requiring multiple vertical boxes
+        // made ordinary dialogue silently fall back to the weaker ML Kit path.
+        return kana >= 2
+                && meaningfulChars >= 2;
     }
 
     private void startContextRefinement(
@@ -393,30 +394,6 @@ public class TranslationEngine {
                     ) {
                         if (sequence
                                 != requestSequence.get()) {
-                            return;
-                        }
-
-                        if (pageText != null
-                                && !pageText.trim().isEmpty()) {
-                            String cleanPageText =
-                                    pageText.trim();
-
-                            savePageTranslation(
-                                    cacheKey,
-                                    cleanPageText
-                            );
-
-                            deepDelivered.set(true);
-
-                            callback.onSuccess(
-                                    Collections.singletonList(
-                                            makePageTranslationBlock(
-                                                    blocks,
-                                                    cleanPageText
-                                            )
-                                    ),
-                                    true
-                            );
                             return;
                         }
 
@@ -443,25 +420,52 @@ public class TranslationEngine {
                                         1,
                                         (int) Math.ceil(
                                                 blocks.size()
-                                                        * 0.65
+                                                        * 0.55
                                         )
                                 );
 
-                        if (accepted < minimum) {
+                        // Prefer per-bubble results so the high-quality pass keeps
+                        // the original text locations instead of collapsing the
+                        // whole page into one giant translation card.
+                        if (accepted >= minimum) {
+                            saveCachedPage(
+                                    cacheKey,
+                                    blocks
+                            );
+
+                            deepDelivered.set(true);
+
+                            callback.onSuccess(
+                                    blocks,
+                                    true
+                            );
                             return;
                         }
 
-                        saveCachedPage(
-                                cacheKey,
-                                blocks
-                        );
+                        // Plain-text/page output is only a compatibility fallback
+                        // for a model response that could not be mapped by id.
+                        if (pageText != null
+                                && !pageText.trim().isEmpty()) {
+                            String cleanPageText =
+                                    pageText.trim();
 
-                        deepDelivered.set(true);
+                            savePageTranslation(
+                                    cacheKey,
+                                    cleanPageText
+                            );
 
-                        callback.onSuccess(
-                                blocks,
-                                true
-                        );
+                            deepDelivered.set(true);
+
+                            callback.onSuccess(
+                                    Collections.singletonList(
+                                            makePageTranslationBlock(
+                                                    blocks,
+                                                    cleanPageText
+                                            )
+                                    ),
+                                    true
+                            );
+                        }
                     }
 
                     @Override

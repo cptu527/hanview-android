@@ -107,20 +107,16 @@ class LocalContextTranslator(
 
                 val systemInstruction = Contents.of(
                     "/no_think\n" +
-                            "너는 일본어 세로쓰기 만화를 한국어로 현지화하는 전문 번역가다. " +
-                            "가장 중요한 목표는 독자가 장면의 의미와 감정 흐름을 한 번에 이해하게 만드는 것이다. " +
-                            "입력은 이미 오른쪽 열에서 왼쪽 열 순서로 정렬되어 있다. " +
-                            "한 문장이 여러 세로열에 걸쳐 끊겼다면 반드시 앞뒤를 이어 하나의 자연스러운 문장으로 복원한다. " +
-                            "반대로 서로 다른 대사나 문장을 억지로 합치지 않는다. " +
-                            "생략된 주어·목적어, 누가 누구에게 말하는지, 가족관계, 존댓말/반말, 호칭, 감정, 앞뒤 맥락을 적극적으로 복원한다. " +
-                            "원문 의미는 보존하되 일본어 직역투는 버리고 실제 한국 만화 대사처럼 자연스럽게 쓴다. " +
-                            "초벌 한국어가 있더라도 원문 일본어가 기준이며 오역은 반드시 고친다. " +
-                            "설명, 해설, 번역 노트, 메타 발언, 요약은 절대 쓰지 않는다. " +
-                            "모든 원문 내용을 빠짐없이 읽는 순서대로 번역한다. " +
-                            "출력은 반드시 JSON 하나만 반환한다. 형식은 " +
-                            "{\"page_text\":\"페이지 전체를 읽는 순서대로 자연스럽게 이어 쓴 최종 한국어 번역\"," +
-                            "\"translations\":[{\"id\":0,\"text\":\"해당 항목 번역\"}]}. " +
-                            "page_text는 이 페이지의 최종 읽기용 번역이며 절대 비워두지 않는다."
+                            "너는 일본어 만화·게임 대사를 한국어로 현지화하는 전문 번역가다. " +
+                            "입력 items는 OCR 결과이며 source_ja가 유일한 원문이다. OCR에는 글자 누락·오인식·세로쓰기 분절이 있을 수 있으므로 " +
+                            "장면 전체와 인접 항목, box 좌표, previous_page_context를 함께 보고 문장을 복원한다. " +
+                            "세로쓰기는 같은 영역 안에서 위에서 아래, 열은 오른쪽에서 왼쪽으로 읽되 서로 다른 말풍선·패널을 억지로 합치지 않는다. " +
+                            "생략된 주어와 목적어, 화자 관계, 호칭, 존댓말/반말, 감정과 말투를 앞뒤 문맥에 맞춰 일관되게 유지한다. " +
+                            "원문 의미와 수위, 욕설, 은어를 임의로 순화·추가·삭제하지 않는다. 일본어 어순을 베끼지 말고 실제 한국 만화 대사처럼 자연스럽게 쓴다. " +
+                            "각 입력 id를 정확히 한 번씩 translations에 반환하고, 같은 번역을 여러 id에 반복하지 않는다. " +
+                            "설명·해설·번역 노트·메타 발언은 금지한다. 출력은 JSON 하나만 반환한다. " +
+                            "형식은 {\"page_text\":\"\",\"translations\":[{\"id\":0,\"text\":\"번역\"}]}. " +
+                            "page_text는 호환용이므로 원칙적으로 빈 문자열로 두고 translations를 완성한다."
                 )
 
                 val config = ConversationConfig(
@@ -150,7 +146,8 @@ class LocalContextTranslator(
                     previousPageContext =
                         buildPreviousContext(
                             snapshot,
-                            parsed.translations
+                            parsed.translations,
+                            parsed.pageText
                         )
                     callback.onSuccess(
                         parsed.translations,
@@ -189,7 +186,7 @@ class LocalContextTranslator(
                     EngineConfig(
                         modelPath = file.absolutePath,
                         backend = backend,
-                        maxNumTokens = 2048,
+                        maxNumTokens = 3072,
                         cacheDir = appContext.cacheDir.absolutePath
                     )
                 )
@@ -228,51 +225,98 @@ class LocalContextTranslator(
         blocks: List<OcrBlock>
     ): String {
         val ordered = blocks.sortedWith { a, b ->
-            if (a.verticalSource && b.verticalSource) {
-                val column = b.bounds.right.compareTo(a.bounds.right)
-                if (column != 0) return@sortedWith column
+            val av = a.verticalSource ||
+                a.bounds.height() > a.bounds.width() * 1.6f
+            val bv = b.verticalSource ||
+                b.bounds.height() > b.bounds.width() * 1.6f
+
+            if (av && bv) {
+                val verticalOverlap =
+                    kotlin.math.max(
+                        0,
+                        kotlin.math.min(
+                            a.bounds.bottom,
+                            b.bounds.bottom
+                        ) - kotlin.math.max(
+                            a.bounds.top,
+                            b.bounds.top
+                        )
+                    )
+                val minHeight =
+                    kotlin.math.max(
+                        1,
+                        kotlin.math.min(
+                            a.bounds.height(),
+                            b.bounds.height()
+                        )
+                    )
+
+                if (verticalOverlap.toFloat() / minHeight >= 0.20f) {
+                    val byX =
+                        b.bounds.centerX()
+                            .compareTo(
+                                a.bounds.centerX()
+                            )
+                    if (byX != 0) return@sortedWith byX
+                }
             }
 
-            val top = a.bounds.top.compareTo(b.bounds.top)
-            if (top != 0) top else a.bounds.left.compareTo(b.bounds.left)
+            val byTop =
+                a.bounds.top.compareTo(
+                    b.bounds.top
+                )
+            if (byTop != 0) {
+                byTop
+            } else if (av && bv) {
+                b.bounds.centerX()
+                    .compareTo(
+                        a.bounds.centerX()
+                    )
+            } else {
+                a.bounds.left.compareTo(
+                    b.bounds.left
+                )
+            }
         }
 
         val items = JSONArray()
 
         ordered.forEachIndexed { index, block ->
-            val item = JSONObject()
-                .put("id", block.id)
-                .put("reading_order", index)
-                .put("vertical", block.verticalSource)
-                .put("source_ja", block.original)
+            val box = JSONArray()
+                .put(block.bounds.left)
+                .put(block.bounds.top)
+                .put(block.bounds.right)
+                .put(block.bounds.bottom)
 
-            val draft = block.translated?.trim().orEmpty()
-            if (draft.isNotEmpty()
-                && draft != block.original.trim()
-            ) {
-                item.put("draft_ko", draft)
-            }
-
-            items.put(item)
+            items.put(
+                JSONObject()
+                    .put("id", block.id)
+                    .put("reading_order_hint", index)
+                    .put("vertical", block.verticalSource)
+                    .put("box", box)
+                    .put(
+                        "source_ja",
+                        block.original
+                            .replace("\\n", "")
+                            .trim()
+                    )
+            )
         }
 
         val root = JSONObject()
             .put(
                 "task",
-                "Translate the visible Japanese manga page into one coherent Korean reading translation. " +
-                        "source_ja is authoritative and draft_ko is only a rough draft. Fix all draft mistakes. " +
-                        "Adjacent items may be fragments of the same sentence, so merge them when the Japanese meaning requires it. " +
-                        "Keep unrelated speech separate. Preserve reading order and all meaning. " +
-                        "Use neighboring items and previous_page_context to resolve omitted subjects, relationships, " +
-                        "honorifics, emotion and consistent speech level. Return both page_text and per-item translations."
+                "Read all OCR items as one Japanese scene, repair only obvious OCR/segmentation errors using context and coordinates, then translate every id into fluent Korean. Keep speakers, relationships, speech level, names, tone and meaning consistent. Do not trust or invent text that is not supported by source_ja."
             )
             .put("items", items)
 
-        val previous = previousPageContext.trim()
+        val previous =
+            previousPageContext.trim()
+
         if (previous.isNotEmpty()) {
             root.put(
                 "previous_page_context",
-                previous
+                previous.takeLast(2200)
             )
         }
 
@@ -281,39 +325,64 @@ class LocalContextTranslator(
 
     private fun buildPreviousContext(
         blocks: List<OcrBlock>,
-        translations: Map<Int, String>
+        translations: Map<Int, String>,
+        pageText: String
     ): String {
-        val ordered = blocks.sortedWith { a, b ->
-            if (a.verticalSource && b.verticalSource) {
-                val column = b.bounds.right.compareTo(a.bounds.right)
-                if (column != 0) return@sortedWith column
+        val ordered = blocks.sortedBy {
+            it.id
+        }
+
+        val current =
+            StringBuilder()
+
+        for (block in ordered.takeLast(10)) {
+            val ko =
+                translations[block.id]
+                    ?.trim()
+                    .orEmpty()
+
+            if (ko.isEmpty()) {
+                continue
             }
 
-            val top = a.bounds.top.compareTo(b.bounds.top)
-            if (top != 0) top else a.bounds.left.compareTo(b.bounds.left)
-        }
+            if (current.isNotEmpty()) {
+                current.append("\n")
+            }
 
-        val tail = ordered.takeLast(8)
-        val out = StringBuilder()
-
-        for (block in tail) {
-            val ko = translations[block.id]?.trim().orEmpty()
-            if (ko.isEmpty()) continue
-
-            if (out.isNotEmpty()) out.append("\n")
-            out.append("JA: ")
-                .append(block.original.replace("\n", " ").trim())
+            current.append("JA: ")
+                .append(
+                    block.original
+                        .replace("\n", " ")
+                        .trim()
+                )
                 .append("\nKO: ")
                 .append(ko)
-                .append("\n")
         }
 
-        val value = out.toString().trim()
-        return if (value.length <= 2200) {
-            value
-        } else {
-            value.takeLast(2200)
+        if (current.isEmpty()
+            && pageText.isNotBlank()) {
+            current.append("KO_PAGE: ")
+                .append(
+                    pageText.trim()
+                )
         }
+
+        val prior =
+            previousPageContext
+                .trim()
+                .takeLast(1100)
+
+        val combined =
+            buildString {
+                if (prior.isNotEmpty()) {
+                    append(prior)
+                    append("\n---\n")
+                }
+                append(current)
+            }
+                .trim()
+
+        return combined.takeLast(2600)
     }
 
     private data class ParsedResult(
@@ -335,37 +404,92 @@ class LocalContextTranslator(
         val end = clean.lastIndexOf('}')
 
         if (start >= 0 && end > start) {
-            clean = clean.substring(start, end + 1)
-        }
+            val jsonText =
+                clean.substring(
+                    start,
+                    end + 1
+                )
 
-        val root = JSONObject(clean)
-        val list = root.optJSONArray("translations")
-        val out = LinkedHashMap<Int, String>()
+            try {
+                val root =
+                    JSONObject(jsonText)
+                val list =
+                    root.optJSONArray(
+                        "translations"
+                    )
+                val out =
+                    LinkedHashMap<Int, String>()
 
-        if (list != null) {
-            for (i in 0 until list.length()) {
-                val item = list.optJSONObject(i) ?: continue
-                val id = item.optInt("id", Int.MIN_VALUE)
-                val text = item.optString("text", "").trim()
+                if (list != null) {
+                    for (i in 0 until list.length()) {
+                        val item =
+                            list.optJSONObject(i)
+                                ?: continue
+                        val id =
+                            item.optInt(
+                                "id",
+                                Int.MIN_VALUE
+                            )
+                        val text =
+                            item.optString(
+                                "text",
+                                ""
+                            )
+                                .trim()
 
-                if (id != Int.MIN_VALUE
-                    && text.isNotEmpty()
-                    && !looksLikeMetaCommentary(text)
-                ) {
-                    out[id] = text
+                        if (id != Int.MIN_VALUE
+                            && text.isNotEmpty()
+                            && !looksLikeMetaCommentary(
+                                text
+                            )
+                        ) {
+                            out[id] =
+                                text
+                        }
+                    }
                 }
+
+                val pageText =
+                    root
+                        .optString(
+                            "page_text",
+                            ""
+                        )
+                        .trim()
+                        .takeIf {
+                            it.isNotEmpty()
+                                    && !looksLikeMetaCommentary(
+                                it
+                            )
+                        }
+                        ?: ""
+
+                return ParsedResult(
+                    translations = out,
+                    pageText = pageText
+                )
+            } catch (_: Throwable) {
+                // Fall through to plain-text recovery below.
             }
         }
 
-        val pageText = root
-            .optString("page_text", "")
-            .trim()
-            .takeIf { it.isNotEmpty() && !looksLikeMetaCommentary(it) }
-            ?: ""
+        // Small local models occasionally ignore the JSON wrapper even when the
+        // translation itself is good. Keep that result as a compatibility page
+        // translation rather than throwing the whole pass away.
+        val fallback =
+            clean
+                .trim()
+                .takeIf {
+                    it.isNotEmpty()
+                            && !looksLikeMetaCommentary(
+                        it
+                    )
+                }
+                ?: ""
 
         return ParsedResult(
-            translations = out,
-            pageText = pageText
+            translations = emptyMap(),
+            pageText = fallback
         )
     }
 
