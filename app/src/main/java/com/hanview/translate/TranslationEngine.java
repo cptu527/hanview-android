@@ -2,6 +2,8 @@ package com.hanview.translate;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.os.Handler;
+import android.os.Looper;
 
 import com.google.mlkit.common.model.DownloadConditions;
 import com.google.mlkit.nl.languageid.LanguageIdentification;
@@ -22,6 +24,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public class TranslationEngine {
@@ -44,6 +47,10 @@ public class TranslationEngine {
             ConcurrentHashMap.newKeySet();
     private final SharedPreferences persistentCache;
     private final LocalContextTranslator localContextTranslator;
+    private final Handler fallbackHandler =
+            new Handler(Looper.getMainLooper());
+    private final AtomicInteger requestSequence =
+            new AtomicInteger(0);
 
     private final Map<String, List<String>> pageCache =
             Collections.synchronizedMap(
@@ -119,6 +126,9 @@ public class TranslationEngine {
             return;
         }
 
+        final int sequence =
+                requestSequence.incrementAndGet();
+
         // Every new screen invalidates a slower refinement from the previous one.
         localContextTranslator.cancelPending();
 
@@ -141,7 +151,7 @@ public class TranslationEngine {
         }
 
         String refinedKey =
-                "llm-v6:"
+                "llm-v7:"
                         + baseKey;
 
         if (useContextModel) {
@@ -164,11 +174,8 @@ public class TranslationEngine {
             }
         }
 
-        // Fast path is always first. This is what Taobao/Chinese pages use,
-        // and Japanese manga gets this immediately while the larger LLM
-        // refines the same screen in the background.
         String fastKey =
-                "fast-v6:"
+                "fast-v7:"
                         + baseKey;
 
         List<String> fastCached =
@@ -189,13 +196,52 @@ public class TranslationEngine {
             );
 
             if (useContextModel) {
-                refineWithContextModel(
+                startContextRefinement(
                         copyBlocks(blocks),
                         refinedKey,
+                        sequence,
+                        new AtomicBoolean(false),
                         callback
                 );
             }
             return;
+        }
+
+        AtomicBoolean deepStarted =
+                new AtomicBoolean(false);
+        AtomicBoolean deepDelivered =
+                new AtomicBoolean(false);
+
+        Runnable startDeepFallback = () -> {
+            if (sequence
+                    != requestSequence.get()) {
+                return;
+            }
+
+            if (!useContextModel
+                    || !deepStarted.compareAndSet(
+                    false,
+                    true
+            )) {
+                return;
+            }
+
+            // If the fast translator stalls, do not block the whole feature.
+            // Let the 4B model translate the original Japanese directly.
+            startContextRefinement(
+                    copyBlocks(blocks),
+                    refinedKey,
+                    sequence,
+                    deepDelivered,
+                    callback
+            );
+        };
+
+        if (useContextModel) {
+            fallbackHandler.postDelayed(
+                    startDeepFallback,
+                    1400L
+            );
         }
 
         translateLocalNatural(
@@ -207,21 +253,36 @@ public class TranslationEngine {
                             List<OcrBlock> translated,
                             boolean usedAi
                     ) {
+                        if (sequence
+                                != requestSequence.get()) {
+                            return;
+                        }
+
                         saveCachedPage(
                                 fastKey,
                                 translated
                         );
 
-                        // Never make the user wait for the LLM just to see a translation.
-                        callback.onSuccess(
-                                translated,
-                                false
-                        );
+                        // Do not overwrite a higher-quality result that already won the race.
+                        if (!deepDelivered.get()) {
+                            callback.onSuccess(
+                                    translated,
+                                    false
+                            );
+                        }
 
-                        if (useContextModel) {
-                            refineWithContextModel(
+                        if (useContextModel
+                                && deepStarted.compareAndSet(
+                                false,
+                                true
+                        )) {
+                            // Fast translation arrived in time: feed it as a draft
+                            // so the 4B model can correct errors and rewrite it naturally.
+                            startContextRefinement(
                                     copyBlocks(translated),
                                     refinedKey,
+                                    sequence,
+                                    deepDelivered,
                                     callback
                             );
                         }
@@ -231,6 +292,27 @@ public class TranslationEngine {
                     public void onError(
                             String message
                     ) {
+                        if (sequence
+                                != requestSequence.get()) {
+                            return;
+                        }
+
+                        if (useContextModel) {
+                            if (deepStarted.compareAndSet(
+                                    false,
+                                    true
+                            )) {
+                                startContextRefinement(
+                                        copyBlocks(blocks),
+                                        refinedKey,
+                                        sequence,
+                                        deepDelivered,
+                                        callback
+                                );
+                            }
+                            return;
+                        }
+
                         callback.onError(message);
                     }
                 }
@@ -274,9 +356,11 @@ public class TranslationEngine {
                 && kana >= 2;
     }
 
-    private void refineWithContextModel(
+    private void startContextRefinement(
             List<OcrBlock> blocks,
             String cacheKey,
+            int sequence,
+            AtomicBoolean deepDelivered,
             Callback callback
     ) {
         localContextTranslator.translate(
@@ -286,6 +370,11 @@ public class TranslationEngine {
                     public void onSuccess(
                             Map<Integer, String> translations
                     ) {
+                        if (sequence
+                                != requestSequence.get()) {
+                            return;
+                        }
+
                         int accepted = 0;
 
                         for (OcrBlock block : blocks) {
@@ -322,6 +411,8 @@ public class TranslationEngine {
                                 blocks
                         );
 
+                        deepDelivered.set(true);
+
                         callback.onSuccess(
                                 blocks,
                                 true
@@ -332,8 +423,8 @@ public class TranslationEngine {
                     public void onError(
                             String message
                     ) {
-                        // The fast translation is already on screen.
-                        // A slow refinement failure must never make live translation fail.
+                        // Fast translation may already be visible. A deep refinement
+                        // failure must not tear it down.
                     }
                 }
         );
@@ -1232,6 +1323,7 @@ public class TranslationEngine {
     }
 
     public void cancelPending() {
+        requestSequence.incrementAndGet();
         // ML Kit tasks cannot be cancelled reliably, but stale LLM refinement can.
         localContextTranslator.cancelPending();
     }
