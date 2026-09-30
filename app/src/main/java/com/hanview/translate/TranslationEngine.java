@@ -17,7 +17,6 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -408,66 +407,58 @@ public class TranslationEngine {
                 getTranslator(source);
 
         Runnable runTranslations = () -> {
-            List<OcrBlock> ordered =
-                    new ArrayList<>(blocks);
-
-            // Japanese manga is usually read right-to-left by vertical column.
-            // Keep the original block objects, but build neighboring context in
-            // actual reading order so omitted subjects/honorifics have a chance
-            // to resolve more naturally in the local translator.
-            if ("ja".equals(languageTag)) {
-                ordered.sort(
-                        (a, b) -> {
-                            boolean av = a.verticalSource;
-                            boolean bv = b.verticalSource;
-
-                            if (av && bv) {
-                                int column =
-                                        Integer.compare(
-                                                b.bounds.right,
-                                                a.bounds.right
-                                        );
-                                if (column != 0) {
-                                    return column;
-                                }
-                            }
-
-                            int top =
-                                    Integer.compare(
-                                            a.bounds.top,
-                                            b.bounds.top
-                                    );
-                            if (top != 0) {
-                                return top;
-                            }
-
-                            return Integer.compare(
-                                    a.bounds.left,
-                                    b.bounds.left
-                            );
-                        }
-                );
-            }
-
             AtomicInteger remaining =
                     new AtomicInteger(
-                            ordered.size()
+                            blocks.size()
                     );
             AtomicInteger successes =
                     new AtomicInteger(0);
 
-            for (int i = 0;
-                 i < ordered.size();
-                 i++) {
-                translateOneWithContext(
-                        translator,
-                        ordered,
-                        i,
-                        languageTag,
-                        remaining,
-                        successes,
-                        callback
-                );
+            for (OcrBlock block : blocks) {
+                // Translate only the actual merged paragraph. ML Kit Translate is
+                // not a generative model; feeding fake PREV/TARGET/NEXT markers
+                // makes it translate the markers and often destroys the sentence.
+                String sourceText =
+                        normalizeSource(
+                                block.original
+                        );
+
+                translator.translate(
+                                sourceText
+                        )
+                        .addOnSuccessListener(
+                                text -> {
+                                    if (text != null
+                                            && !text.trim().isEmpty()
+                                            && !text.trim().equals(
+                                            block.original
+                                    )) {
+                                        block.translated =
+                                                polishKorean(
+                                                        text,
+                                                        block.original
+                                                );
+                                        successes.incrementAndGet();
+                                    }
+
+                                    if (remaining.decrementAndGet()
+                                            == 0) {
+                                        callback.done(
+                                                successes.get()
+                                        );
+                                    }
+                                }
+                        )
+                        .addOnFailureListener(
+                                error -> {
+                                    if (remaining.decrementAndGet()
+                                            == 0) {
+                                        callback.done(
+                                                successes.get()
+                                        );
+                                    }
+                                }
+                        );
             }
         };
 
@@ -491,208 +482,6 @@ public class TranslationEngine {
                         error ->
                                 callback.done(0)
                 );
-    }
-
-    private void translateOneWithContext(
-            Translator translator,
-            List<OcrBlock> ordered,
-            int index,
-            String languageTag,
-            AtomicInteger remaining,
-            AtomicInteger successes,
-            GroupResult callback
-    ) {
-        OcrBlock block =
-                ordered.get(index);
-
-        String direct =
-                normalizeSource(
-                        block.original
-                );
-
-        boolean useContext =
-                "ja".equals(languageTag)
-                        && ordered.size() > 1;
-
-        if (!useContext) {
-            translateDirect(
-                    translator,
-                    block,
-                    direct,
-                    remaining,
-                    successes,
-                    callback
-            );
-            return;
-        }
-
-        String previous =
-                index > 0
-                        ? normalizeSource(
-                        ordered.get(index - 1).original
-                )
-                        : "";
-
-        String next =
-                index + 1 < ordered.size()
-                        ? normalizeSource(
-                        ordered.get(index + 1).original
-                )
-                        : "";
-
-        String contextual =
-                "<<<PREV>>>"
-                        + previous
-                        + "\n<<<TARGET>>>"
-                        + direct
-                        + "\n<<<NEXT>>>"
-                        + next;
-
-        translator.translate(contextual)
-                .addOnSuccessListener(
-                        text -> {
-                            String target =
-                                    extractContextTarget(
-                                            text
-                                    );
-
-                            if (target == null
-                                    || target.trim().isEmpty()
-                                    || target.trim().equals(
-                                    direct
-                            )) {
-                                translateDirect(
-                                        translator,
-                                        block,
-                                        direct,
-                                        remaining,
-                                        successes,
-                                        callback
-                                );
-                                return;
-                            }
-
-                            finishTranslatedBlock(
-                                    block,
-                                    target,
-                                    remaining,
-                                    successes,
-                                    callback
-                            );
-                        }
-                )
-                .addOnFailureListener(
-                        error ->
-                                translateDirect(
-                                        translator,
-                                        block,
-                                        direct,
-                                        remaining,
-                                        successes,
-                                        callback
-                                )
-                );
-    }
-
-    private String extractContextTarget(
-            String translated
-    ) {
-        if (translated == null) {
-            return null;
-        }
-
-        int target =
-                translated.indexOf(
-                        "<<<TARGET>>>"
-                );
-
-        if (target < 0) {
-            return null;
-        }
-
-        int start =
-                target
-                        + "<<<TARGET>>>".length();
-
-        int end =
-                translated.indexOf(
-                        "<<<NEXT>>>",
-                        start
-                );
-
-        if (end < 0) {
-            end =
-                    translated.length();
-        }
-
-        String value =
-                translated.substring(
-                        start,
-                        end
-                ).trim();
-
-        return value.isEmpty()
-                ? null
-                : value;
-    }
-
-    private void translateDirect(
-            Translator translator,
-            OcrBlock block,
-            String sourceText,
-            AtomicInteger remaining,
-            AtomicInteger successes,
-            GroupResult callback
-    ) {
-        translator.translate(sourceText)
-                .addOnSuccessListener(
-                        text ->
-                                finishTranslatedBlock(
-                                        block,
-                                        text,
-                                        remaining,
-                                        successes,
-                                        callback
-                                )
-                )
-                .addOnFailureListener(
-                        error ->
-                                finishTranslatedBlock(
-                                        block,
-                                        null,
-                                        remaining,
-                                        successes,
-                                        callback
-                                )
-                );
-    }
-
-    private void finishTranslatedBlock(
-            OcrBlock block,
-            String text,
-            AtomicInteger remaining,
-            AtomicInteger successes,
-            GroupResult callback
-    ) {
-        if (text != null
-                && !text.trim().isEmpty()
-                && !text.trim().equals(
-                block.original
-        )) {
-            block.translated =
-                    polishKorean(
-                            text,
-                            block.original
-                    );
-            successes.incrementAndGet();
-        }
-
-        if (remaining.decrementAndGet()
-                == 0) {
-            callback.done(
-                    successes.get()
-            );
-        }
     }
 
     private Translator getTranslator(
