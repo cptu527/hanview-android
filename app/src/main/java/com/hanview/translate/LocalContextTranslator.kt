@@ -3,6 +3,7 @@ package com.hanview.translate
 import android.content.Context
 import com.google.ai.edge.litertlm.Backend
 import com.google.ai.edge.litertlm.Contents
+import com.google.ai.edge.litertlm.Conversation
 import com.google.ai.edge.litertlm.ConversationConfig
 import com.google.ai.edge.litertlm.Engine
 import com.google.ai.edge.litertlm.EngineConfig
@@ -43,9 +44,12 @@ class LocalContextTranslator(
     private val appContext = context.applicationContext
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val engineMutex = Mutex()
+    private val inferenceMutex = Mutex()
     @Volatile private var engine: Engine? = null
+    @Volatile private var activeConversation: Conversation? = null
     private val closed = AtomicBoolean(false)
     private val requestSequence = AtomicInteger(0)
+    private val resetEngineRequested = AtomicBoolean(false)
     @Volatile private var previousPageContext: String = ""
     @Volatile private var activeBackend: String = "none"
 
@@ -53,6 +57,35 @@ class LocalContextTranslator(
 
     fun cancelPending() {
         requestSequence.incrementAndGet()
+
+        // Cancelling only the callback sequence is not enough: the native GPU
+        // decode would keep running and block the next page. Stop the actual
+        // LiteRT-LM conversation as well.
+        activeConversation?.let { conversation ->
+            runCatching {
+                conversation.cancelProcess()
+            }
+        }
+    }
+
+    fun abortAndReset() {
+        requestSequence.incrementAndGet()
+        resetEngineRequested.set(true)
+
+        activeConversation?.let { conversation ->
+            runCatching {
+                conversation.cancelProcess()
+            }
+        }
+
+        // If no inference is active, reset immediately. If one is active this
+        // waits for its cancellation to unwind, then recreates the engine on
+        // the next request.
+        scope.launch {
+            inferenceMutex.withLock {
+                resetEngineIfRequested()
+            }
+        }
     }
 
     fun resetContext() {
@@ -100,10 +133,12 @@ class LocalContextTranslator(
         }
 
         scope.launch {
-            try {
-                if (closed.get()) return@launch
+            inferenceMutex.withLock {
+                try {
+                    if (closed.get()) return@withLock
 
-                val activeEngine = ensureEngine()
+                    resetEngineIfRequested()
+                    val activeEngine = ensureEngine()
 
                 // One deliberate 4B pass is noticeably faster on phones than
                 // running a reconstruction generation and then a translation
@@ -147,21 +182,35 @@ class LocalContextTranslator(
                 fun generateOnce(
                     promptText: String,
                     maxOutputTokens: Int
-                ): String =
-                    activeEngine
-                        .createConversation(config)
-                        .use { conversation ->
-                            conversation.sendMessage(
-                                promptText,
-                                extraContext = mapOf(
-                                    "enable_thinking" to false
-                                ),
-                                maxOutputToken = maxOutputTokens,
-                                thinkingConfig = ThinkingConfig(
-                                    enableThinking = false
-                                )
-                            ).toString()
+                ): String {
+                    val conversation =
+                        activeEngine.createConversation(
+                            config
+                        )
+
+                    activeConversation = conversation
+
+                    return try {
+                        conversation.sendMessage(
+                            promptText,
+                            extraContext = mapOf(
+                                "enable_thinking" to false
+                            ),
+                            maxOutputToken = maxOutputTokens,
+                            thinkingConfig = ThinkingConfig(
+                                enableThinking = false
+                            )
+                        ).toString()
+                    } finally {
+                        if (activeConversation === conversation) {
+                            activeConversation = null
                         }
+
+                        runCatching {
+                            conversation.close()
+                        }
+                    }
+                }
 
                 val responseText =
                     try {
@@ -212,15 +261,45 @@ class LocalContextTranslator(
                         parsed.pageText
                     )
                 }
-            } catch (t: Throwable) {
-                if (sequence != requestSequence.get()) {
-                    return@launch
-                }
+                } catch (t: Throwable) {
+                    if (sequence != requestSequence.get()) {
+                        return@withLock
+                    }
 
-                callback.onError(
-                    t.message?.takeIf { it.isNotBlank() }
-                        ?: "실시간 1.7B 번역 중 오류가 발생했어요."
-                )
+                    callback.onError(
+                        t.message?.takeIf { it.isNotBlank() }
+                            ?: "실시간 1.7B 번역 중 오류가 발생했어요."
+                    )
+                } finally {
+                    // A hard timeout asks for a fresh native engine. Do it only
+                    // after the current decode has unwound so engine lifetime
+                    // cannot race with native inference.
+                    resetEngineIfRequested()
+                }
+            }
+        }
+    }
+
+    private suspend fun resetEngineIfRequested() {
+        if (!resetEngineRequested.compareAndSet(
+                true,
+                false
+            )
+        ) {
+            return
+        }
+
+        activeConversation = null
+
+        engineMutex.withLock {
+            val current = engine
+            engine = null
+            activeBackend = "none"
+
+            if (current != null) {
+                runCatching {
+                    current.close()
+                }
             }
         }
     }
@@ -755,11 +834,31 @@ class LocalContextTranslator(
     fun close() {
         if (!closed.compareAndSet(false, true)) return
 
-        scope.launch {
-            engineMutex.withLock {
-                engine?.close()
-                engine = null
+        requestSequence.incrementAndGet()
+
+        activeConversation?.let { conversation ->
+            runCatching {
+                conversation.cancelProcess()
             }
+        }
+
+        scope.launch {
+            inferenceMutex.withLock {
+                activeConversation = null
+
+                engineMutex.withLock {
+                    val current = engine
+                    engine = null
+                    activeBackend = "none"
+
+                    if (current != null) {
+                        runCatching {
+                            current.close()
+                        }
+                    }
+                }
+            }
+
             scope.cancel()
         }
     }
