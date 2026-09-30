@@ -23,6 +23,9 @@ public class MainActivity extends Activity {
     private static final int REQ_NOTIFICATIONS = 1003;
 
     private TextView overlayStatus;
+    private TextView localModelStatus;
+    private Button localModelButton;
+    private volatile boolean localModelDownloading = false;
     private TextView updateBadge;
     private Button updateButton;
     private AppUpdateManager updateManager;
@@ -123,6 +126,27 @@ public class MainActivity extends Activity {
         );
         root.addView(localInfo, spaced());
 
+        root.addView(sectionTitle("고급 문맥 번역"));
+        localModelStatus = infoBox("");
+        root.addView(localModelStatus, spaced());
+
+        localModelButton =
+                button("무료 문맥 모델 다운로드 (약 330MB)");
+        localModelButton.setOnClickListener(v ->
+                downloadLocalContextModel()
+        );
+        root.addView(
+                localModelButton,
+                spaced()
+        );
+
+        TextView modelInfo = text(
+                "선택 기능입니다. 설치하면 화면 전체 OCR을 작은 언어모델이 한 번에 읽어 등장인물 말투와 앞뒤 문맥을 참고해 번역합니다. 모델은 휴대폰 안에서만 실행되며 ChatGPT/API 사용량이나 추가 요금이 없습니다.",
+                12,
+                Color.rgb(112, 119, 132)
+        );
+        root.addView(modelInfo, spaced());
+
         root.addView(sectionTitle("화면 위 표시 권한"));
         overlayStatus = infoBox("");
         root.addView(overlayStatus, spaced());
@@ -208,6 +232,121 @@ public class MainActivity extends Activity {
                             : "권한이 필요해요. 아래 버튼을 눌러 허용해 주세요."
             );
         }
+
+        if (!localModelDownloading
+                && localModelStatus != null
+                && localModelButton != null) {
+            boolean modelReady =
+                    LocalContextTranslator
+                            .isModelReady(this);
+
+            localModelStatus.setText(
+                    modelReady
+                            ? "✓ 고급 문맥 모델 설치됨\n화면 전체를 함께 보고 자연스러운 한국어 번역을 우선 사용합니다."
+                            : "고급 문맥 모델 미설치\n현재는 가벼운 기기 번역을 사용합니다."
+            );
+
+            localModelButton.setVisibility(
+                    modelReady
+                            ? View.GONE
+                            : View.VISIBLE
+            );
+        }
+    }
+
+    private void downloadLocalContextModel() {
+        if (localModelDownloading) {
+            return;
+        }
+
+        localModelDownloading = true;
+
+        if (localModelButton != null) {
+            localModelButton.setEnabled(false);
+            localModelButton.setText(
+                    "문맥 모델 다운로드 준비 중..."
+            );
+        }
+
+        if (localModelStatus != null) {
+            localModelStatus.setText(
+                    "문맥 모델 다운로드를 시작합니다. 약 330MB라 Wi-Fi 사용을 권장해요."
+            );
+        }
+
+        LocalContextTranslator.downloadModel(
+                this,
+                new LocalContextTranslator.DownloadCallback() {
+                    @Override
+                    public void onProgress(int percent) {
+                        runOnUiThread(() -> {
+                            if (localModelStatus != null) {
+                                localModelStatus.setText(
+                                        "고급 문맥 모델 다운로드 중... "
+                                                + percent
+                                                + "%"
+                                );
+                            }
+                            if (localModelButton != null) {
+                                localModelButton.setText(
+                                        "다운로드 중 "
+                                                + percent
+                                                + "%"
+                                );
+                            }
+                        });
+                    }
+
+                    @Override
+                    public void onSuccess() {
+                        runOnUiThread(() -> {
+                            localModelDownloading = false;
+
+                            Toast.makeText(
+                                    MainActivity.this,
+                                    "고급 문맥 번역 모델 설치 완료!",
+                                    Toast.LENGTH_LONG
+                            ).show();
+
+                            if (localModelButton != null) {
+                                localModelButton.setEnabled(true);
+                                localModelButton.setText(
+                                        "무료 문맥 모델 다운로드 (약 330MB)"
+                                );
+                            }
+
+                            updateStatus();
+                        });
+                    }
+
+                    @Override
+                    public void onError(String message) {
+                        runOnUiThread(() -> {
+                            localModelDownloading = false;
+
+                            if (localModelStatus != null) {
+                                localModelStatus.setText(
+                                        "문맥 모델 다운로드 실패\n"
+                                                + message
+                                );
+                            }
+
+                            if (localModelButton != null) {
+                                localModelButton.setEnabled(true);
+                                localModelButton.setText(
+                                        "다시 다운로드"
+                                );
+                            }
+
+                            Toast.makeText(
+                                    MainActivity.this,
+                                    message,
+                                    Toast.LENGTH_LONG
+                            ).show();
+                        });
+                    }
+                }
+        );
     }
 
     private void requestOverlayPermission() {
