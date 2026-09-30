@@ -64,8 +64,30 @@ public class TranslationPatchManager {
             background.setCornerRadius(0);
             view.setBackground(background);
 
-            int width = Math.min(screenWidth, Math.max(dp(vertical ? 56 : 36),
-                    block.bounds.width() + dp(8)));
+            int width;
+            if (vertical) {
+                // Korean expands horizontally much more than Japanese vertical text.
+                // Give manga paragraphs enough width to remain readable and to avoid
+                // measuring into an over-tall off-screen strip.
+                width = Math.min(
+                        screenWidth,
+                        Math.max(
+                                dp(96),
+                                Math.min(
+                                        dp(168),
+                                        block.bounds.width() + dp(72)
+                                )
+                        )
+                );
+            } else {
+                width = Math.min(
+                        screenWidth,
+                        Math.max(
+                                dp(48),
+                                block.bounds.width() + dp(12)
+                        )
+                );
+            }
             float scaledDensity = context.getResources().getDisplayMetrics().scaledDensity;
             float sourcePx = vertical && block.sourceGlyphWidthPx > 0
                     ? block.sourceGlyphWidthPx : block.sourceTextSizePx;
@@ -82,15 +104,25 @@ public class TranslationPatchManager {
             }
             int height = Math.max(sourceHeight, view.getMeasuredHeight());
             if (height > screenHeight) {
-                width = screenWidth;
+                width = Math.min(screenWidth, Math.max(width, dp(196)));
+                fontSp = Math.max(11f, fontSp - 1f);
+                view.setTextSize(TypedValue.COMPLEX_UNIT_SP, fontSp);
                 view.measure(View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
                         View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
-                height = view.getMeasuredHeight();
+                height = Math.min(screenHeight, Math.max(dp(28), view.getMeasuredHeight()));
             }
+
             Rect placement = PatchPlacement.find(block.bounds.left - dp(4), block.bounds.top - dp(2), width,
                     height, screenWidth, screenHeight, dp(2), patchBounds);
-            // Never stack text windows on top of one another.
-            if (placement == null) continue;
+
+            // Readability beats perfect collision avoidance: if all collision-free
+            // positions are occupied, place the translation over its own source
+            // instead of silently showing nothing.
+            if (placement == null) {
+                int left = Math.max(0, Math.min(block.bounds.left - dp(4), screenWidth - width));
+                int top = Math.max(0, Math.min(block.bounds.top - dp(2), screenHeight - height));
+                placement = new Rect(left, top, left + width, top + height);
+            }
             int type = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
                     ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
                     : WindowManager.LayoutParams.TYPE_PHONE;
