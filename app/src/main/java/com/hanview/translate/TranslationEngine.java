@@ -2,6 +2,7 @@ package com.hanview.translate;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.graphics.Rect;
 import android.os.Handler;
 import android.os.Looper;
 
@@ -29,7 +30,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 public class TranslationEngine {
     public static final String PREFS = "hanview";
-    private static final String CACHE_PREFS = "viewnyang_local_natural_cache_v5";
+    private static final String CACHE_PREFS = "viewnyang_local_natural_cache_v6";
     private static final String CACHE_INDEX = "_index";
     private static final int MAX_PERSISTED_PAGES = 120;
 
@@ -151,10 +152,29 @@ public class TranslationEngine {
         }
 
         String refinedKey =
-                "llm-v7:"
+                "llm-v8:"
                         + baseKey;
 
         if (useContextModel) {
+            String pageText =
+                    loadPageTranslation(
+                            refinedKey
+                    );
+
+            if (pageText != null
+                    && !pageText.trim().isEmpty()) {
+                callback.onSuccess(
+                        Collections.singletonList(
+                                makePageTranslationBlock(
+                                        blocks,
+                                        pageText
+                                )
+                        ),
+                        true
+                );
+                return;
+            }
+
             List<String> refinedCached =
                     getCachedPage(
                             refinedKey,
@@ -175,7 +195,7 @@ public class TranslationEngine {
         }
 
         String fastKey =
-                "fast-v7:"
+                "fast-v8:"
                         + baseKey;
 
         List<String> fastCached =
@@ -368,10 +388,35 @@ public class TranslationEngine {
                 new LocalContextTranslator.Callback() {
                     @Override
                     public void onSuccess(
-                            Map<Integer, String> translations
+                            Map<Integer, String> translations,
+                            String pageText
                     ) {
                         if (sequence
                                 != requestSequence.get()) {
+                            return;
+                        }
+
+                        if (pageText != null
+                                && !pageText.trim().isEmpty()) {
+                            String cleanPageText =
+                                    pageText.trim();
+
+                            savePageTranslation(
+                                    cacheKey,
+                                    cleanPageText
+                            );
+
+                            deepDelivered.set(true);
+
+                            callback.onSuccess(
+                                    Collections.singletonList(
+                                            makePageTranslationBlock(
+                                                    blocks,
+                                                    cleanPageText
+                                            )
+                                    ),
+                                    true
+                            );
                             return;
                         }
 
@@ -428,6 +473,119 @@ public class TranslationEngine {
                     }
                 }
         );
+    }
+
+    private OcrBlock makePageTranslationBlock(
+            List<OcrBlock> source,
+            String pageText
+    ) {
+        Rect bounds =
+                new Rect();
+
+        boolean initialized = false;
+        StringBuilder original =
+                new StringBuilder();
+
+        OcrBlock styleSource =
+                source.isEmpty()
+                        ? null
+                        : source.get(0);
+
+        for (OcrBlock block : source) {
+            if (!initialized) {
+                bounds.set(
+                        block.bounds
+                );
+                initialized = true;
+            } else {
+                bounds.union(
+                        block.bounds
+                );
+            }
+
+            if (block.original != null
+                    && !block.original.trim().isEmpty()) {
+                if (original.length() > 0) {
+                    original.append("\n");
+                }
+                original.append(
+                        block.original.trim()
+                );
+            }
+        }
+
+        if (!initialized) {
+            bounds.set(
+                    0,
+                    0,
+                    1,
+                    1
+            );
+        }
+
+        OcrBlock page =
+                new OcrBlock(
+                        source.isEmpty()
+                                ? 0
+                                : source.get(0).id,
+                        original.toString(),
+                        bounds
+                );
+
+        if (styleSource != null) {
+            page.copyVisualStyleFrom(
+                    styleSource
+            );
+        }
+
+        page.translated =
+                pageText;
+        page.verticalSource =
+                true;
+        page.pageTranslation =
+                true;
+
+        return page;
+    }
+
+    private String loadPageTranslation(
+            String key
+    ) {
+        String value =
+                persistentCache.getString(
+                        cacheKey(
+                                "page-text:"
+                                        + key
+                        ),
+                        ""
+                );
+
+        if (value == null
+                || value.trim().isEmpty()) {
+            return null;
+        }
+
+        return value;
+    }
+
+    private void savePageTranslation(
+            String key,
+            String pageText
+    ) {
+        if (pageText == null
+                || pageText.trim().isEmpty()) {
+            return;
+        }
+
+        persistentCache.edit()
+                .putString(
+                        cacheKey(
+                                "page-text:"
+                                        + key
+                        ),
+                        pageText.trim()
+                )
+                .apply();
     }
 
     private List<OcrBlock> copyBlocks(
