@@ -156,7 +156,7 @@ public class TranslationEngine {
         }
 
         String refinedKey =
-                "llm-v16:"
+                "llm-v17:"
                         + baseKey;
 
         if (useContextModel) {
@@ -517,8 +517,10 @@ public class TranslationEngine {
                             return;
                         }
 
-                        callback.onError(
-                                "실시간 번역 모델이 충분한 실제 번역문을 반환하지 못했어요."
+                        fallbackFromContextModel(
+                                blocks,
+                                sequence,
+                                callback
                         );
                     }
 
@@ -532,11 +534,61 @@ public class TranslationEngine {
                         }
 
                         if (!deepDelivered.get()) {
-                            callback.onError(
-                                    "실시간 번역 모델 실행 실패: "
-                                            + message
+                            fallbackFromContextModel(
+                                    blocks,
+                                    sequence,
+                                    callback
                             );
                         }
+                    }
+                }
+        );
+    }
+
+    private void fallbackFromContextModel(
+            List<OcrBlock> blocks,
+            int sequence,
+            Callback callback
+    ) {
+        if (sequence
+                != requestSequence.get()) {
+            return;
+        }
+
+        translateLocalNatural(
+                blocks,
+                inferPageLanguage(
+                        blocks
+                ),
+                new Callback() {
+                    @Override
+                    public void onSuccess(
+                            List<OcrBlock> translated,
+                            boolean usedAi
+                    ) {
+                        if (sequence
+                                != requestSequence.get()) {
+                            return;
+                        }
+
+                        callback.onSuccess(
+                                translated,
+                                false
+                        );
+                    }
+
+                    @Override
+                    public void onError(
+                            String message
+                    ) {
+                        if (sequence
+                                != requestSequence.get()) {
+                            return;
+                        }
+
+                        callback.onError(
+                                message
+                        );
                     }
                 }
         );
