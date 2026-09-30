@@ -23,6 +23,10 @@ public class MainActivity extends Activity {
     private static final int REQ_NOTIFICATIONS = 1003;
 
     private TextView overlayStatus;
+    private TextView chatGptStatus;
+    private Button chatGptConnectButton;
+    private Button chatGptDisconnectButton;
+    private ChatGptPlanClient chatGptPlanClient;
     private TextView updateBadge;
     private Button updateButton;
     private AppUpdateManager updateManager;
@@ -30,6 +34,8 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        chatGptPlanClient =
+                new ChatGptPlanClient(this);
         updateManager = new AppUpdateManager(
                 this,
                 new AppUpdateManager.Listener() {
@@ -115,6 +121,46 @@ public class MainActivity extends Activity {
         );
         root.addView(liveInfo);
 
+        root.addView(sectionTitle("ChatGPT 번역"));
+        chatGptStatus = infoBox("");
+        root.addView(chatGptStatus, spaced());
+
+        chatGptConnectButton =
+                button("Continue with ChatGPT");
+        chatGptConnectButton.setOnClickListener(v ->
+                connectChatGpt()
+        );
+        root.addView(
+                chatGptConnectButton,
+                spaced()
+        );
+
+        chatGptDisconnectButton =
+                button("ChatGPT 연결 해제");
+        chatGptDisconnectButton.setOnClickListener(v -> {
+            chatGptPlanClient.disconnect();
+            updateStatus();
+            Toast.makeText(
+                    this,
+                    "이 기기의 ChatGPT 연결을 해제했어요.",
+                    Toast.LENGTH_SHORT
+            ).show();
+        });
+        root.addView(
+                chatGptDisconnectButton,
+                spaced()
+        );
+
+        TextView chatGptInfo = text(
+                "연결하면 별도 API 키나 API 결제 없이, 허용한 ChatGPT 플랜 사용량으로 화면 번역을 먼저 처리합니다. 사용할 수 없을 때만 기기 내 번역으로 전환됩니다.",
+                12,
+                Color.rgb(112, 119, 132)
+        );
+        root.addView(
+                chatGptInfo,
+                spaced()
+        );
+
         root.addView(sectionTitle("화면 위 표시 권한"));
         overlayStatus = infoBox("");
         root.addView(overlayStatus, spaced());
@@ -188,15 +234,114 @@ public class MainActivity extends Activity {
     }
 
     private void updateStatus() {
-        if (overlayStatus == null) return;
+        boolean overlay =
+                Build.VERSION.SDK_INT
+                        < Build.VERSION_CODES.M
+                        || Settings.canDrawOverlays(this);
 
-        boolean overlay = Build.VERSION.SDK_INT < Build.VERSION_CODES.M
-                || Settings.canDrawOverlays(this);
+        if (overlayStatus != null) {
+            overlayStatus.setText(
+                    overlay
+                            ? "✓ 화면 위 표시 권한이 허용되어 있어요."
+                            : "권한이 필요해요. 아래 버튼을 눌러 허용해 주세요."
+            );
+        }
 
-        overlayStatus.setText(
-                overlay
-                        ? "✓ 화면 위 표시 권한이 허용되어 있어요."
-                        : "권한이 필요해요. 아래 버튼을 눌러 허용해 주세요."
+        if (chatGptPlanClient != null
+                && chatGptStatus != null) {
+            boolean connected =
+                    chatGptPlanClient.hasPlanAccess();
+
+            String email =
+                    chatGptPlanClient.connectedEmail();
+
+            if (connected) {
+                String account =
+                        email.isEmpty()
+                                ? ""
+                                : "\n" + email;
+
+                chatGptStatus.setText(
+                        "✓ ChatGPT 연결됨"
+                                + account
+                                + "\n실시간 번역은 GPT를 우선 사용합니다."
+                );
+            } else {
+                chatGptStatus.setText(
+                        "ChatGPT 연결 안 됨\n"
+                                + "아래 버튼으로 한 번 연결하면 GPT 번역을 화면 위에 그대로 표시할 수 있어요."
+                );
+            }
+
+            if (chatGptConnectButton != null) {
+                chatGptConnectButton.setVisibility(
+                        connected
+                                ? View.GONE
+                                : View.VISIBLE
+                );
+            }
+
+            if (chatGptDisconnectButton != null) {
+                chatGptDisconnectButton.setVisibility(
+                        connected
+                                ? View.VISIBLE
+                                : View.GONE
+                );
+            }
+        }
+    }
+
+    private void connectChatGpt() {
+        if (chatGptConnectButton != null) {
+            chatGptConnectButton.setEnabled(false);
+            chatGptConnectButton.setText(
+                    "ChatGPT 연결 중..."
+            );
+        }
+
+        chatGptPlanClient.beginSignIn(
+                this,
+                new ChatGptPlanClient.SignInCallback() {
+                    @Override
+                    public void onSuccess(
+                            String email
+                    ) {
+                        if (chatGptConnectButton != null) {
+                            chatGptConnectButton.setEnabled(true);
+                            chatGptConnectButton.setText(
+                                    "Continue with ChatGPT"
+                            );
+                        }
+
+                        updateStatus();
+
+                        Toast.makeText(
+                                MainActivity.this,
+                                "ChatGPT 연결 완료! 이제 GPT로 화면 번역해요.",
+                                Toast.LENGTH_LONG
+                        ).show();
+                    }
+
+                    @Override
+                    public void onError(
+                            String message
+                    ) {
+                        if (chatGptConnectButton != null) {
+                            chatGptConnectButton.setEnabled(true);
+                            chatGptConnectButton.setText(
+                                    "Continue with ChatGPT"
+                            );
+                        }
+
+                        updateStatus();
+
+                        Toast.makeText(
+                                MainActivity.this,
+                                message,
+                                Toast.LENGTH_LONG
+                        ).show();
+                    }
+                }
         );
     }
 
