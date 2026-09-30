@@ -957,34 +957,43 @@ public class OverlayCaptureService extends Service {
         translationEngine.translate(
                 normalized,
                 new TranslationEngine.Callback() {
-                    @Override
-                    public void onSuccess(
-                            List<OcrBlock> translated,
-                            boolean usedAi
-                    ) {
-                        if (!liveEnabled
-                                || frameGeneration != generation) {
-                            processing = false;
-                            return;
-                        }
+                    // These flags are only read/written on the main thread.
+                    private boolean previewShown;
+                    private boolean finished;
 
+                    private void showResult(List<OcrBlock> translated, boolean finalResult) {
                         mainHandler.post(() -> {
-                            if (patchManager != null && liveEnabled) {
-                                patchManager.show(
-                                        translated,
-                                        captureWidth,
-                                        captureHeight
-                                );
-                                cleanCaptureRequested = false;
+                            if (!liveEnabled || frameGeneration != generation || finished) return;
+                            if (finalResult) finished = true;
+                            if (patchManager != null) {
+                                patchManager.show(translated, captureWidth, captureHeight);
+                                activePatchBounds.clear();
+                                activePatchBounds.addAll(patchManager.getPatchBounds());
+                                // Expanded/moved boxes must be masked in the monitor too.
+                                lastMonitorFingerprint = null;
+                                cleanCaptureRequested = !patchManager.hasPatches();
                             }
+                            // Once a preview is visible, page monitoring can resume while AI works.
+                            // A late final callback must not release another frame's processing lock.
+                            if (!previewShown) processing = false;
+                            previewShown = true;
                         });
-
-                        processing = false;
                     }
 
-                    @Override
-                    public void onError(String message) {
-                        processing = false;
+                    @Override public void onPreview(List<OcrBlock> translated) {
+                        showResult(translated, false);
+                    }
+
+                    @Override public void onSuccess(List<OcrBlock> translated, boolean usedAi) {
+                        showResult(translated, true);
+                    }
+
+                    @Override public void onError(String message) {
+                        mainHandler.post(() -> {
+                            if (frameGeneration != generation || finished) return;
+                            finished = true;
+                            if (!previewShown) processing = false;
+                        });
                     }
                 }
         );
@@ -1547,13 +1556,13 @@ public class OverlayCaptureService extends Service {
                         + green * 587
                         + blue * 114) / 1000;
 
-        if (luminance >= 225
-                && max - min <= 36) {
+        if (luminance >= 248
+                && max - min <= 8) {
             red = 255;
             green = 255;
             blue = 255;
             luminance = 255;
-        } else if (luminance <= 28) {
+        } else if (luminance <= 8) {
             red = 0;
             green = 0;
             blue = 0;

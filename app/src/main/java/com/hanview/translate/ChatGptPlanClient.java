@@ -49,6 +49,8 @@ import okhttp3.Response;
 import okhttp3.ResponseBody;
 
 public class ChatGptPlanClient {
+    private final java.util.concurrent.atomic.AtomicInteger translationSequence =
+            new java.util.concurrent.atomic.AtomicInteger();
     private static final String PREFS =
             "viewnyang_chatgpt";
     private static final String KEY_HOST_ID =
@@ -552,7 +554,12 @@ public class ChatGptPlanClient {
             List<OcrBlock> blocks,
             TranslationCallback callback
     ) {
+        final int requestSequence = translationSequence.incrementAndGet();
         executor.execute(() -> {
+            if (requestSequence != translationSequence.get()) {
+                callback.onError("화면이 바뀌어 이전 번역 요청을 건너뜁니다.");
+                return;
+            }
             try {
                 JSONObject credentials =
                         ensureFreshCredentials();

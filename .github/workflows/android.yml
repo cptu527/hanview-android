@@ -36,6 +36,12 @@ jobs:
         with:
           gradle-version: "9.6.0"
 
+      - name: Check translation paragraph placement
+        run: |
+          mkdir -p /tmp/placement-classes
+          javac -d /tmp/placement-classes tests/placement/android/graphics/Rect.java app/src/main/java/com/hanview/translate/PatchPlacement.java tests/placement/com/hanview/translate/PlacementTest.java
+          java -cp /tmp/placement-classes com.hanview.translate.PlacementTest
+
       - name: Build APK
         run: gradle :app:assembleDebug --stacktrace
 

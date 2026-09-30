@@ -32,6 +32,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public class TranslationEngine {
     public static final String PREFS = "hanview";
@@ -40,6 +41,7 @@ public class TranslationEngine {
     public interface Callback {
         void onSuccess(List<OcrBlock> blocks, boolean usedAi);
         void onError(String message);
+        default void onPreview(List<OcrBlock> blocks) { }
     }
 
     private final Context context;
@@ -63,8 +65,10 @@ public class TranslationEngine {
         this.context = context.getApplicationContext();
         this.chatGptPlanClient =
                 new ChatGptPlanClient(this.context);
-        // ChatGPT plan translation is preferred when connected.
-        // ML Kit remains only as a no-network / no-plan fallback.
+        // Prepare the local preview before the first captured page.
+        warmUp("ja");
+        warmUp("en");
+        warmUp("zh");
     }
 
     public static void prewarmCommon(Context context) {
@@ -121,9 +125,11 @@ public class TranslationEngine {
         SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         String endpoint = prefs.getString(KEY_ENDPOINT, "").trim();
 
+        AtomicBoolean completed = new AtomicBoolean(false);
         Callback mergeBack = new Callback() {
             @Override
             public void onSuccess(List<OcrBlock> translatedPending, boolean usedAi) {
+                completed.set(true);
                 for (OcrBlock block : translatedPending) {
                     if (block.translated != null
                             && !block.translated.trim().isEmpty()
@@ -142,9 +148,43 @@ public class TranslationEngine {
 
             @Override
             public void onError(String message) {
+                completed.set(true);
                 callback.onError(message);
             }
         };
+
+        if (chatGptPreferred || !endpoint.isEmpty()) {
+            // Separate objects prevent a late local result overwriting the AI result.
+            List<OcrBlock> preview = new ArrayList<>();
+            List<OcrBlock> localPending = new ArrayList<>();
+            for (OcrBlock block : blocks) {
+                OcrBlock copy = new OcrBlock(block.id, block.original, block.bounds);
+                copy.copyVisualStyleFrom(block);
+                String cached = getCached("local", block.original);
+                if (block.translated != null && !block.translated.equals(block.original)) {
+                    copy.translated = block.translated;
+                } else if (cached != null) {
+                    copy.translated = cached;
+                } else {
+                    localPending.add(copy);
+                }
+                preview.add(copy);
+            }
+            if (localPending.isEmpty()) {
+                callback.onPreview(preview);
+            } else {
+                translateLocalAuto(localPending, new Callback() {
+                    @Override public void onSuccess(List<OcrBlock> local, boolean usedAi) {
+                        for (OcrBlock block : local) {
+                            if (block.translated != null && !block.translated.equals(block.original))
+                                putCached("local", block.original, block.translated);
+                        }
+                        if (!completed.get()) callback.onPreview(preview);
+                    }
+                    @Override public void onError(String message) { /* AI is still running. */ }
+                });
+            }
+        }
 
         if (chatGptPreferred) {
             translateWithChatGpt(
