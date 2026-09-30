@@ -8,6 +8,7 @@ import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
 import android.util.TypedValue;
+import android.util.Log;
 import android.view.Gravity;
 import android.view.View;
 import android.view.WindowManager;
@@ -84,6 +85,14 @@ public class TranslationPatchManager {
                     screenWidth,
                     screenHeight
             );
+
+            if (patches.isEmpty()) {
+                showEmergencyPanel(
+                        translated,
+                        screenWidth,
+                        screenHeight
+                );
+            }
             return;
         }
 
@@ -92,6 +101,14 @@ public class TranslationPatchManager {
                 screenWidth,
                 screenHeight
         );
+
+        if (patches.isEmpty()) {
+            showEmergencyPanel(
+                    translated,
+                    screenWidth,
+                    screenHeight
+            );
+        }
     }
 
     private void showMangaPanel(
@@ -289,34 +306,22 @@ public class TranslationPatchManager {
                         measuredHeight
                 );
 
+        int safeTop =
+                dp(92);
         int safeBottom =
-                screenHeight - dp(92);
+                screenHeight - dp(96);
 
         int preferredBelow =
-                sourceBottom + dp(12);
+                sourceBottom + dp(10);
 
-        int y;
-
-        if (preferredBelow + height
-                <= safeBottom) {
-            y = preferredBelow;
-        } else {
-            int preferredAbove =
-                    sourceTop
-                            - dp(12)
-                            - height;
-
-            if (preferredAbove
-                    >= dp(90)) {
-                y = preferredAbove;
-            } else {
-                y =
-                        Math.max(
-                                dp(90),
+        int y =
+                Math.max(
+                        safeTop,
+                        Math.min(
+                                preferredBelow,
                                 safeBottom - height
-                        );
-            }
-        }
+                        )
+                );
 
         int type =
                 Build.VERSION.SDK_INT
@@ -331,8 +336,7 @@ public class TranslationPatchManager {
                         type,
                         WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
                                 | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
-                                | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
-                                | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                                | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
                         PixelFormat.TRANSLUCENT
                 );
 
@@ -360,7 +364,12 @@ public class TranslationPatchManager {
                             params.y + height
                     )
             );
-        } catch (Exception ignored) {
+        } catch (Exception error) {
+            Log.e(
+                    "ViewNyangPatch",
+                    "Failed to add manga translation panel",
+                    error
+            );
         }
     }
 
@@ -581,8 +590,179 @@ public class TranslationPatchManager {
                 patchBounds.add(
                         placement
                 );
-            } catch (Exception ignored) {
+            } catch (Exception error) {
+                Log.e(
+                        "ViewNyangPatch",
+                        "Failed to add inline translation patch",
+                        error
+                );
             }
+        }
+    }
+
+    private void showEmergencyPanel(
+            List<OcrBlock> blocks,
+            int screenWidth,
+            int screenHeight
+    ) {
+        StringBuilder body =
+                new StringBuilder();
+
+        for (OcrBlock block : blocks) {
+            String text =
+                    block.translated == null
+                            ? ""
+                            : block.translated.trim();
+
+            if (text.isEmpty()) {
+                continue;
+            }
+
+            if (body.length() > 0) {
+                body.append("\n\n");
+            }
+
+            body.append(text);
+        }
+
+        if (body.length() == 0) {
+            return;
+        }
+
+        TextView view =
+                new TextView(context);
+
+        view.setText(body.toString());
+        view.setTextColor(Color.WHITE);
+        view.setTextSize(
+                TypedValue.COMPLEX_UNIT_SP,
+                14
+        );
+        view.setGravity(Gravity.START);
+        view.setPadding(
+                dp(14),
+                dp(12),
+                dp(14),
+                dp(12)
+        );
+        view.setLineSpacing(
+                dp(2),
+                1.12f
+        );
+
+        GradientDrawable background =
+                new GradientDrawable();
+
+        background.setColor(
+                Color.argb(
+                        238,
+                        12,
+                        13,
+                        15
+                )
+        );
+        background.setCornerRadius(
+                dp(10)
+        );
+
+        view.setBackground(background);
+
+        int margin =
+                dp(12);
+        int width =
+                Math.max(
+                        dp(180),
+                        screenWidth - margin * 2
+                );
+        width =
+                Math.min(
+                        screenWidth - dp(4),
+                        width
+                );
+
+        int maxHeight =
+                Math.max(
+                        dp(120),
+                        Math.round(
+                                screenHeight * 0.40f
+                        )
+                );
+
+        view.measure(
+                View.MeasureSpec.makeMeasureSpec(
+                        width,
+                        View.MeasureSpec.EXACTLY
+                ),
+                View.MeasureSpec.makeMeasureSpec(
+                        maxHeight,
+                        View.MeasureSpec.AT_MOST
+                )
+        );
+
+        int height =
+                Math.max(
+                        dp(72),
+                        Math.min(
+                                maxHeight,
+                                view.getMeasuredHeight()
+                        )
+                );
+
+        int safeBottom =
+                screenHeight - dp(96);
+        int y =
+                Math.max(
+                        dp(92),
+                        safeBottom - height
+                );
+
+        int type =
+                Build.VERSION.SDK_INT
+                        >= Build.VERSION_CODES.O
+                        ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                        : WindowManager.LayoutParams.TYPE_PHONE;
+
+        WindowManager.LayoutParams params =
+                new WindowManager.LayoutParams(
+                        width,
+                        height,
+                        type,
+                        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                                | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                                | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                        PixelFormat.TRANSLUCENT
+                );
+
+        params.gravity =
+                Gravity.TOP | Gravity.START;
+        params.x =
+                Math.max(
+                        dp(2),
+                        (screenWidth - width) / 2
+                );
+        params.y =
+                y;
+
+        try {
+            windowManager.addView(
+                    view,
+                    params
+            );
+            patches.add(view);
+            patchBounds.add(
+                    new Rect(
+                            params.x,
+                            params.y,
+                            params.x + width,
+                            params.y + height
+                    )
+            );
+        } catch (Exception error) {
+            Log.e(
+                    "ViewNyangPatch",
+                    "Emergency translation panel also failed",
+                    error
+            );
         }
     }
 
