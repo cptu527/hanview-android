@@ -4,6 +4,7 @@ import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.graphics.Bitmap;
 import android.net.Uri;
 import android.security.keystore.KeyGenParameterSpec;
 import android.security.keystore.KeyProperties;
@@ -13,6 +14,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
@@ -108,6 +110,15 @@ public class ChatGptPlanClient {
     public interface TranslationCallback {
         void onSuccess(
                 Map<Integer, String> translations,
+                String model
+        );
+
+        void onError(String message);
+    }
+
+    public interface VisionTranslationCallback {
+        void onSuccess(
+                String pageText,
                 String model
         );
 
@@ -557,6 +568,135 @@ public class ChatGptPlanClient {
         });
     }
 
+    public void translateImage(
+            Bitmap bitmap,
+            VisionTranslationCallback callback
+    ) {
+        cancelTranslations();
+        final int requestSequence =
+                translationSequence.get();
+
+        executor.execute(() -> {
+            Exception lastError = null;
+
+            for (int attempt = 1; attempt <= 3; attempt++) {
+                if (requestSequence
+                        != translationSequence.get()) {
+                    return;
+                }
+
+                try {
+                    JSONObject credentials =
+                            ensureFreshCredentials();
+
+                    if (credentials == null
+                            || !hasScope(
+                            credentials.optString(
+                                    "scope",
+                                    ""
+                            ),
+                            REQUIRED_SCOPE
+                    )) {
+                        throw new IllegalStateException(
+                                "ChatGPT가 연결되어 있지 않아요."
+                        );
+                    }
+
+                    String accessToken =
+                            credentials.optString(
+                                    "access_token",
+                                    ""
+                            );
+
+                    if (accessToken.isEmpty()) {
+                        throw new IllegalStateException(
+                                "ChatGPT 로그인 정보가 없어요."
+                        );
+                    }
+
+                    String model =
+                            getOrChooseModel(
+                                    accessToken
+                            );
+
+                    JSONObject request =
+                            buildVisionTranslationRequest(
+                                    bitmap,
+                                    model
+                            );
+
+                    String output =
+                            streamResponse(
+                                    accessToken,
+                                    request,
+                                    requestSequence
+                            );
+
+                    String pageText =
+                            parseVisionTranslation(
+                                    output
+                            );
+
+                    prefs.edit()
+                            .remove(KEY_LAST_ERROR)
+                            .apply();
+
+                    callback.onSuccess(
+                            pageText,
+                            model
+                    );
+                    return;
+                } catch (Exception e) {
+                    if (requestSequence
+                            != translationSequence.get()) {
+                        return;
+                    }
+
+                    lastError = e;
+
+                    if (attempt == 1
+                            && isBadRequest(e)) {
+                        prefs.edit()
+                                .remove(KEY_MODEL)
+                                .apply();
+                        continue;
+                    }
+
+                    if (attempt < 3
+                            && isTransientTranslationError(e)) {
+                        try {
+                            Thread.sleep(
+                                    500L * attempt
+                            );
+                        } catch (InterruptedException interrupted) {
+                            Thread.currentThread()
+                                    .interrupt();
+                            return;
+                        }
+                        continue;
+                    }
+
+                    break;
+                }
+            }
+
+            String message =
+                    safeMessage(
+                            lastError,
+                            "GPT 이미지 번역에 실패했어요."
+                    );
+
+            prefs.edit()
+                    .putString(
+                            KEY_LAST_ERROR,
+                            message
+                    )
+                    .apply();
+
+            callback.onError(message);
+        });
+    }
+
     public void translate(
             List<OcrBlock> blocks,
             TranslationCallback callback
@@ -717,6 +857,154 @@ public class ChatGptPlanClient {
                 || message.contains("unexpected end of stream")
                 || message.contains("temporarily unavailable")
                 || message.contains("사용량 확인이 일시적으로 불가능");
+    }
+
+    private JSONObject buildVisionTranslationRequest(
+            Bitmap bitmap,
+            String model
+    ) throws Exception {
+        if (bitmap == null
+                || bitmap.isRecycled()) {
+            throw new IllegalArgumentException(
+                    "번역할 이미지가 없어요."
+            );
+        }
+
+        ByteArrayOutputStream output =
+                new ByteArrayOutputStream();
+
+        bitmap.compress(
+                Bitmap.CompressFormat.JPEG,
+                88,
+                output
+        );
+
+        String encoded =
+                Base64.encodeToString(
+                        output.toByteArray(),
+                        Base64.NO_WRAP
+                );
+
+        String instructions =
+                "You are ViewNyang's highest-quality Korean manga and screen translation engine. "
+                        + "The image is the source of truth. Read the visible text directly from the image instead of trusting OCR. "
+                        + "For Japanese vertical manga, determine the real reading order from the page layout: usually top-to-bottom within a column and right-to-left across columns, while respecting separate dialogue/narration regions. "
+                        + "Reconstruct sentences that are split across multiple vertical columns when the Japanese grammar requires it. Do not merge unrelated speech. "
+                        + "Use the entire page as one scene to infer omitted subjects and objects, who is speaking to whom, family or social relationships, honorifics, speech level, emotional tone, and narration voice. "
+                        + "Translate faithfully but rewrite into fluent, publication-quality Korean that sounds originally written in Korean. Avoid literal Japanese syntax and needless pronouns. "
+                        + "Do not summarize, explain, censor, add translation notes, or invent details. Preserve every meaningful statement in reading order. "
+                        + "If the page is Chinese or another language, translate it naturally into Korean using the same quality standard. "
+                        + "Return ONLY JSON with this exact shape: {\"page_text\":\"...\"}. Never use Markdown.";
+
+        JSONArray content =
+                new JSONArray();
+
+        JSONObject textPart =
+                new JSONObject();
+        textPart.put(
+                "type",
+                "input_text"
+        );
+        textPart.put(
+                "text",
+                "Translate every visible foreign-language text on this screen into coherent natural Korean. Read the image itself and return the complete translation in actual reading order."
+        );
+        content.put(textPart);
+
+        JSONObject imagePart =
+                new JSONObject();
+        imagePart.put(
+                "type",
+                "input_image"
+        );
+        imagePart.put(
+                "image_url",
+                "data:image/jpeg;base64,"
+                        + encoded
+        );
+        imagePart.put(
+                "detail",
+                "high"
+        );
+        content.put(imagePart);
+
+        JSONObject message =
+                new JSONObject();
+        message.put(
+                "role",
+                "user"
+        );
+        message.put(
+                "content",
+                content
+        );
+
+        JSONArray input =
+                new JSONArray();
+        input.put(message);
+
+        JSONObject root =
+                new JSONObject();
+        root.put(
+                "model",
+                model
+        );
+        root.put(
+                "instructions",
+                instructions
+        );
+        root.put(
+                "input",
+                input
+        );
+        root.put(
+                "store",
+                false
+        );
+        root.put(
+                "stream",
+                true
+        );
+
+        return root;
+    }
+
+    private String parseVisionTranslation(
+            String output
+    ) throws Exception {
+        String clean =
+                stripCodeFence(output);
+
+        int start =
+                clean.indexOf('{');
+        int end =
+                clean.lastIndexOf('}');
+
+        if (start >= 0
+                && end > start) {
+            clean =
+                    clean.substring(
+                            start,
+                            end + 1
+                    );
+        }
+
+        JSONObject root =
+                new JSONObject(clean);
+
+        String pageText =
+                root.optString(
+                        "page_text",
+                        ""
+                ).trim();
+
+        if (pageText.isEmpty()) {
+            throw new IllegalStateException(
+                    "GPT 번역 결과가 비어 있어요."
+            );
+        }
+
+        return pageText;
     }
 
     private JSONObject buildTranslationRequest(
@@ -1081,7 +1369,10 @@ public class ChatGptPlanClient {
                         ""
                 );
 
-        if (!saved.isEmpty()) {
+        if (!saved.isEmpty()
+                && saved.toLowerCase().contains(
+                "sol"
+        )) {
             return saved;
         }
 
@@ -1156,6 +1447,9 @@ public class ChatGptPlanClient {
 
         String chosen = "";
         String firstVisible = "";
+        String bestSol = "";
+        String bestAstra = "";
+        String bestLuna = "";
 
         for (int i = 0;
              i < models.length();
@@ -1197,12 +1491,28 @@ public class ChatGptPlanClient {
             }
 
             String lower =
-                    slug.toLowerCase();
+                    slug.toLowerCase(
+                            java.util.Locale.ROOT
+                    );
 
-            if (lower.contains("luna")) {
-                chosen = slug;
-                break;
+            if (lower.contains("sol")
+                    && bestSol.isEmpty()) {
+                bestSol = slug;
+            } else if (lower.contains("astra")
+                    && bestAstra.isEmpty()) {
+                bestAstra = slug;
+            } else if (lower.contains("luna")
+                    && bestLuna.isEmpty()) {
+                bestLuna = slug;
             }
+        }
+
+        if (!bestSol.isEmpty()) {
+            chosen = bestSol;
+        } else if (!bestAstra.isEmpty()) {
+            chosen = bestAstra;
+        } else if (!bestLuna.isEmpty()) {
+            chosen = bestLuna;
         }
 
         if (chosen.isEmpty()) {
