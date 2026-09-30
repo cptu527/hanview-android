@@ -210,8 +210,15 @@ public class TranslationEngine {
         Map<String, List<OcrBlock>> groups = new ConcurrentHashMap<>();
         List<OcrBlock> unknown = Collections.synchronizedList(new ArrayList<>());
 
+        String pageHint =
+                inferPageLanguage(blocks);
+
         for (OcrBlock block : blocks) {
-            String quick = quickLanguageGuess(block.original);
+            String quick =
+                    quickLanguageGuess(
+                            block.original,
+                            pageHint
+                    );
 
             if ("ko".equals(quick)) {
                 block.translated = block.original;
@@ -392,7 +399,10 @@ public class TranslationEngine {
                 .addOnSuccessListener(unused -> readyModels.add(source));
     }
 
-    private String quickLanguageGuess(String value) {
+    private String quickLanguageGuess(
+            String value,
+            String pageHint
+    ) {
         boolean hangul = false;
         boolean kana = false;
         boolean han = false;
@@ -422,8 +432,51 @@ public class TranslationEngine {
 
         if (hangul && !kana && !han && !devanagari) return "ko";
         if (kana) return "ja";
+
+        // On a Japanese manga/page, OCR often returns a kanji-only fragment.
+        // Treat those fragments as Japanese when nearby text contains kana,
+        // otherwise ML Kit sends them through Chinese and produces nonsense.
+        if (han && "ja".equals(pageHint)) return "ja";
         if (han) return "zh";
         if (devanagari) return "hi";
+        return null;
+    }
+
+    private String inferPageLanguage(
+            List<OcrBlock> blocks
+    ) {
+        int kana = 0;
+        int han = 0;
+
+        for (OcrBlock block : blocks) {
+            String value = block.original;
+            if (value == null) {
+                continue;
+            }
+
+            for (int i = 0; i < value.length(); i++) {
+                char c = value.charAt(i);
+
+                if (c >= '\u3040'
+                        && c <= '\u30FF') {
+                    kana++;
+                } else if ((c >= '\u3400'
+                        && c <= '\u4DBF')
+                        || (c >= '\u4E00'
+                        && c <= '\u9FFF')) {
+                    han++;
+                }
+            }
+        }
+
+        if (kana >= 2) {
+            return "ja";
+        }
+
+        if (han >= 2) {
+            return "zh";
+        }
+
         return null;
     }
 
