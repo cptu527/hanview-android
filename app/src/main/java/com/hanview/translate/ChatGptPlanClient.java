@@ -639,6 +639,13 @@ public class ChatGptPlanClient {
 
                     lastError = e;
 
+                    if (attempt == 1 && isBadRequest(e)) {
+                        // A cached UI/model slug can become invalid for the direct
+                        // ChatGPT-plan Responses endpoint. Re-discover the API model id.
+                        prefs.edit().remove(KEY_MODEL).apply();
+                        continue;
+                    }
+
                     if (attempt < 3
                             && isTransientTranslationError(e)) {
                         try {
@@ -673,6 +680,17 @@ public class ChatGptPlanClient {
 
             callback.onError(message);
         });
+    }
+
+    private boolean isBadRequest(Exception error) {
+        String message =
+                error == null || error.getMessage() == null
+                        ? ""
+                        : error.getMessage().toLowerCase(java.util.Locale.ROOT);
+        return message.contains("server 오류 (400)")
+                || message.contains("서버 오류 (400)")
+                || message.contains("http 400")
+                || message.contains("bad request");
     }
 
     private boolean isTransientTranslationError(Exception error) {
@@ -794,21 +812,6 @@ public class ChatGptPlanClient {
         root.put(
                 "stream",
                 true
-        );
-
-        JSONObject reasoning =
-                new JSONObject();
-        reasoning.put(
-                "effort",
-                "none"
-        );
-        root.put(
-                "reasoning",
-                reasoning
-        );
-        root.put(
-                "max_output_tokens",
-                1800
         );
 
         return root;
@@ -1172,9 +1175,9 @@ public class ChatGptPlanClient {
 
             String slug =
                     model.optString(
-                            "slug",
+                            "id",
                             model.optString(
-                                    "id",
+                                    "slug",
                                     ""
                             )
                     );
@@ -2232,6 +2235,18 @@ public class ChatGptPlanClient {
                 }
             }
         } catch (Exception ignored) {
+        }
+
+        if (status == 400) {
+            try {
+                JSONObject root = new JSONObject(body == null ? "{}" : body);
+                String detail = root.optString("message", root.optString("detail", "")).trim();
+                if (!detail.isEmpty()) {
+                    return "ChatGPT 요청 오류: " + detail;
+                }
+            } catch (Exception ignored) {
+            }
+            return "ChatGPT 요청 오류 (400)";
         }
 
         if (status == 401) {
