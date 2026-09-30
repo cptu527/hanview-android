@@ -715,7 +715,8 @@ public class ChatGptPlanClient {
                 || message.contains("timed out")
                 || message.contains("connection reset")
                 || message.contains("unexpected end of stream")
-                || message.contains("temporarily unavailable");
+                || message.contains("temporarily unavailable")
+                || message.contains("사용량 확인이 일시적으로 불가능");
     }
 
     private JSONObject buildTranslationRequest(
@@ -963,11 +964,16 @@ public class ChatGptPlanClient {
                                 );
 
                         if ("subscription_sharing_usage_limit_exceeded"
-                                .equals(errorCode)
-                                || "subscription_sharing_usage_unavailable"
                                 .equals(errorCode)) {
                             throw new IllegalStateException(
-                                    "ChatGPT 플랜 사용 한도에 도달했어요."
+                                    "ChatGPT 플랜 공유 사용 한도에 도달했어요. ChatGPT 설정 > 사용량에서 확인해 주세요."
+                            );
+                        }
+
+                        if ("subscription_sharing_usage_unavailable"
+                                .equals(errorCode)) {
+                            throw new IllegalStateException(
+                                    "ChatGPT 사용량 확인이 일시적으로 불가능해요. 잠시 후 자동으로 다시 시도합니다."
                             );
                         }
 
@@ -2217,10 +2223,13 @@ public class ChatGptPlanClient {
                         );
 
                 if ("subscription_sharing_usage_limit_exceeded"
-                        .equals(code)
-                        || "subscription_sharing_usage_unavailable"
                         .equals(code)) {
-                    return "ChatGPT 플랜 사용 한도에 도달했어요.";
+                    return "ChatGPT 플랜 공유 사용 한도에 도달했어요. ChatGPT 설정 > 사용량에서 확인해 주세요.";
+                }
+
+                if ("subscription_sharing_usage_unavailable"
+                        .equals(code)) {
+                    return "ChatGPT 사용량 확인이 일시적으로 불가능해요. 잠시 후 자동으로 다시 시도합니다.";
                 }
 
                 String message =
