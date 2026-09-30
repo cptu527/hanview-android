@@ -643,27 +643,27 @@ public class TranslationEngine {
             char c =
                     value.charAt(i);
 
-            if ((c >= '\\uAC00'
-                    && c <= '\\uD7A3')
-                    || (c >= '\\u1100'
-                    && c <= '\\u11FF')) {
+            if ((c >= 0xAC00
+                    && c <= 0xD7A3)
+                    || (c >= 0x1100
+                    && c <= 0x11FF)) {
                 hangul = true;
             }
 
-            if (c >= '\\u3040'
-                    && c <= '\\u30FF') {
+            if (c >= 0x3040
+                    && c <= 0x30FF) {
                 kana = true;
             }
 
-            if ((c >= '\\u3400'
-                    && c <= '\\u4DBF')
-                    || (c >= '\\u4E00'
-                    && c <= '\\u9FFF')) {
+            if ((c >= 0x3400
+                    && c <= 0x4DBF)
+                    || (c >= 0x4E00
+                    && c <= 0x9FFF)) {
                 han = true;
             }
 
-            if (c >= '\\u0900'
-                    && c <= '\\u097F') {
+            if (c >= 0x0900
+                    && c <= 0x097F) {
                 devanagari = true;
             }
         }
@@ -717,13 +717,13 @@ public class TranslationEngine {
                 char c =
                         value.charAt(i);
 
-                if (c >= '\\u3040'
-                        && c <= '\\u30FF') {
+                if (c >= 0x3040
+                        && c <= 0x30FF) {
                     kana++;
-                } else if ((c >= '\\u3400'
-                        && c <= '\\u4DBF')
-                        || (c >= '\\u4E00'
-                        && c <= '\\u9FFF')) {
+                } else if ((c >= 0x3400
+                        && c <= 0x4DBF)
+                        || (c >= 0x4E00
+                        && c <= 0x9FFF)) {
                     han++;
                 }
             }
@@ -763,8 +763,8 @@ public class TranslationEngine {
                         && c <= 'Z')
                         || (c >= 'a'
                         && c <= 'z')
-                        || (c >= '\\u00C0'
-                        && c <= '\\u024F')) {
+                        || (c >= 0x00C0
+                        && c <= 0x024F)) {
                     latin++;
                 }
             }
