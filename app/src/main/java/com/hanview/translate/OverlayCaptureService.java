@@ -965,7 +965,7 @@ public class OverlayCaptureService extends Service {
         cleanCaptureRequested = false;
         processing = false;
         mainHandler.post(() -> {
-            if (bubble != null && liveEnabled && displayGate.canDisplay(frameGeneration)) bubble.setText("GPT…");
+            if (bubble != null && liveEnabled && displayGate.canDisplay(frameGeneration)) bubble.setText("번역…");
         });
         translationEngine.translate(normalized, new TranslationEngine.Callback() {
             @Override public void onSuccess(List<OcrBlock> translated, boolean usedAi) {
@@ -978,7 +978,7 @@ public class OverlayCaptureService extends Service {
                         cleanCaptureRequested = !patchManager.hasPatches();
                     }
                     translationPending = false;
-                    if (bubble != null) bubble.setText("GPT");
+                    if (bubble != null) bubble.setText("한");
                 });
             }
             @Override public void onError(String message) {
@@ -986,32 +986,16 @@ public class OverlayCaptureService extends Service {
                     if (!liveEnabled || !displayGate.isVisible() || !displayGate.canDisplay(frameGeneration)) return;
                     translationPending = false;
                     long now = SystemClock.uptimeMillis();
-                    boolean hardUsageLimit =
-                            message != null
-                                    && message.contains("플랜 공유 사용 한도");
-
-                    translationRetryAfterMs =
-                            hardUsageLimit
-                                    ? Long.MAX_VALUE
-                                    : now + 2500L;
+                    translationRetryAfterMs = now + 2500L;
                     cleanCaptureRequested = false;
-                    if (bubble != null) {
-                        bubble.setText(
-                                hardUsageLimit
-                                        ? "한도"
-                                        : "!"
-                        );
-                    }
+                    if (bubble != null) bubble.setText("!");
 
                     if (now - lastErrorToastMs >= 15000L) {
                         lastErrorToastMs = now;
                         Toast.makeText(OverlayCaptureService.this, message, Toast.LENGTH_LONG).show();
                     }
 
-                    // Temporary transport/availability failures retry automatically.
-                    // A real plan-sharing limit pauses requests so the app does not
-                    // hammer the endpoint; tapping OFF -> ON manually retries later.
-                    if (!hardUsageLimit && captureHandler != null) {
+                    if (captureHandler != null) {
                         captureHandler.postDelayed(() -> {
                             if (!liveEnabled
                                     || !displayGate.isVisible()
