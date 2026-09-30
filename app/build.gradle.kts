@@ -10,8 +10,8 @@ android {
         applicationId = "com.viewnyang.app"
         minSdk = 23
         targetSdk = 37
-        versionCode = 46
-        versionName = "0.5.1"
+        versionCode = 47
+        versionName = "0.5.2"
     }
 
     signingConfigs {
@@ -50,4 +50,5 @@ dependencies {
     implementation("com.google.mlkit:text-recognition-devanagari:16.0.1")
     implementation("com.google.mlkit:language-id:17.0.6")
     implementation("com.google.mlkit:translate:17.0.3")
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
 }
