@@ -1455,7 +1455,7 @@ public class OverlayCaptureService extends Service {
                 cleanCaptureRequested = false;
 
                 if (translationEngine != null) {
-                    translationEngine.cancelPending();
+                    translationEngine.abortContextModel();
                 }
 
                 if (bubble != null) {
