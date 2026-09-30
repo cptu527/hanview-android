@@ -354,8 +354,7 @@ public class BrowserTranslateActivity extends Activity {
                         if ("http".equalsIgnoreCase(scheme)
                                 || "https".equalsIgnoreCase(scheme)) {
                             clearTranslations();
-                            view.loadUrl(uri.toString());
-                            return true;
+                            return false;
                         }
 
                         try {
