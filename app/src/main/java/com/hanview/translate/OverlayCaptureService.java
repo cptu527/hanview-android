@@ -50,6 +50,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -706,8 +707,11 @@ public class OverlayCaptureService extends Service {
             Bitmap bitmap,
             int frameGeneration
     ) {
-        // Live translation is intentionally local-only. A connected ChatGPT
-        // account must never change the capture path or consume plan/API usage.
+        // OCR stays on-device for stable text boxes and placement. When the
+        // user's ChatGPT plan connection is available, recognized text is sent
+        // to the server translator; otherwise the fast on-device translator is
+        // used as a fallback. The unstable 1.7B local LLM is no longer in the
+        // live translation path.
         processBitmapLocal(
                 bitmap,
                 frameGeneration
@@ -1454,8 +1458,12 @@ public class OverlayCaptureService extends Service {
                         Long.MAX_VALUE;
                 cleanCaptureRequested = false;
 
+                if (gptVisionClient != null) {
+                    gptVisionClient.cancelTranslations();
+                }
+
                 if (translationEngine != null) {
-                    translationEngine.abortContextModel();
+                    translationEngine.cancelPending();
                 }
 
                 if (bubble != null) {
@@ -1464,98 +1472,271 @@ public class OverlayCaptureService extends Service {
 
                 Toast.makeText(
                         OverlayCaptureService.this,
-                        "번역이 35초 안에 끝나지 않았어요. 자동 재시도는 멈췄습니다.",
+                        "서버 번역이 35초 안에 끝나지 않았어요. 이번 요청을 중단했습니다.",
                         Toast.LENGTH_LONG
                 ).show();
             }, 35000L);
         });
-        translationEngine.translate(normalized, new TranslationEngine.Callback() {
-            @Override public void onSuccess(List<OcrBlock> translated, boolean usedAi) {
-                mainHandler.post(() -> {
-                    if (!liveEnabled || !displayGate.isVisible() || !displayGate.canDisplay(frameGeneration)) return;
-                    boolean visibleResult = false;
+        startServerPrimaryTranslation(
+                normalized,
+                frameGeneration
+        );
+    }
 
-                    if (patchManager != null) {
-                        patchManager.show(
-                                translated,
-                                captureWidth,
-                                captureHeight
-                        );
-                        activePatchBounds.clear();
-                        activePatchBounds.addAll(
-                                patchManager.getPatchBounds()
-                        );
-                        visibleResult =
-                                patchManager.hasPatches();
-                        cleanCaptureRequested =
-                                !visibleResult;
-                    }
+    private void startServerPrimaryTranslation(
+            List<OcrBlock> blocks,
+            int frameGeneration
+    ) {
+        if (gptVisionClient != null
+                && gptVisionClient.hasPlanAccess()) {
+            mainHandler.post(() -> {
+                if (bubble != null
+                        && liveEnabled
+                        && displayGate.canDisplay(frameGeneration)) {
+                    bubble.setText("GPT…");
+                }
+            });
 
-                    translationPending = false;
-
-                    if (bubble != null) {
-                        bubble.setText(
-                                visibleResult
-                                        ? (
-                                        usedAi
-                                                ? "문"
-                                                : "초"
-                                )
-                                        : "!"
-                        );
-                    }
-
-                    if (!visibleResult) {
-                        long now =
-                                SystemClock.uptimeMillis();
-
-                        if (now - lastErrorToastMs
-                                >= 15000L) {
-                            lastErrorToastMs = now;
-                            Toast.makeText(
-                                    OverlayCaptureService.this,
-                                    "번역은 끝났지만 화면 표시가 실패했어요. 자동으로 다시 시도합니다.",
-                                    Toast.LENGTH_LONG
-                            ).show();
-                        }
-
-                        translationRetryAfterMs =
-                                now + 1000L;
-                    }
-                });
-            }
-            @Override public void onError(String message) {
-                mainHandler.post(() -> {
-                    if (!liveEnabled || !displayGate.isVisible() || !displayGate.canDisplay(frameGeneration)) return;
-                    translationPending = false;
-                    long now = SystemClock.uptimeMillis();
-                    translationRetryAfterMs = now + 2500L;
-                    cleanCaptureRequested = false;
-                    if (bubble != null) bubble.setText("!");
-
-                    if (now - lastErrorToastMs >= 15000L) {
-                        lastErrorToastMs = now;
-                        Toast.makeText(OverlayCaptureService.this, message, Toast.LENGTH_LONG).show();
-                    }
-
-                    if (captureHandler != null) {
-                        captureHandler.postDelayed(() -> {
+            gptVisionClient.translate(
+                    blocks,
+                    new ChatGptPlanClient.TranslationCallback() {
+                        @Override
+                        public void onSuccess(
+                                Map<Integer, String> translations,
+                                String model
+                        ) {
                             if (!liveEnabled
                                     || !displayGate.isVisible()
-                                    || !displayGate.canDisplay(frameGeneration)
-                                    || translationPending) {
+                                    || !displayGate.canDisplay(frameGeneration)) {
                                 return;
                             }
-                            cleanCaptureRequested = true;
-                            requestFrame();
-                        }, 2600L);
+
+                            List<OcrBlock> translated =
+                                    new ArrayList<>();
+
+                            for (OcrBlock block : blocks) {
+                                String value =
+                                        translations.get(
+                                                block.id
+                                        );
+
+                                if (value == null
+                                        || value.trim().isEmpty()) {
+                                    continue;
+                                }
+
+                                block.translated =
+                                        value.trim();
+                                translated.add(block);
+                            }
+
+                            int minimum =
+                                    Math.max(
+                                            1,
+                                            (int) Math.ceil(
+                                                    blocks.size()
+                                                            * 0.60
+                                            )
+                                    );
+
+                            if (translated.size() < minimum) {
+                                startFastFallbackTranslation(
+                                        blocks,
+                                        frameGeneration
+                                );
+                                return;
+                            }
+
+                            showTranslationResult(
+                                    translated,
+                                    frameGeneration,
+                                    "GPT"
+                            );
+                        }
+
+                        @Override
+                        public void onError(
+                                String message
+                        ) {
+                            if (!liveEnabled
+                                    || !displayGate.isVisible()
+                                    || !displayGate.canDisplay(frameGeneration)) {
+                                return;
+                            }
+
+                            startFastFallbackTranslation(
+                                    blocks,
+                                    frameGeneration
+                            );
+                        }
                     }
-                });
+            );
+            return;
+        }
+
+        startFastFallbackTranslation(
+                blocks,
+                frameGeneration
+        );
+    }
+
+    private void startFastFallbackTranslation(
+            List<OcrBlock> blocks,
+            int frameGeneration
+    ) {
+        if (!liveEnabled
+                || !displayGate.isVisible()
+                || !displayGate.canDisplay(frameGeneration)) {
+            return;
+        }
+
+        mainHandler.post(() -> {
+            if (bubble != null
+                    && liveEnabled
+                    && displayGate.canDisplay(frameGeneration)) {
+                bubble.setText("기기…");
+            }
+        });
+
+        translationEngine.translateFastOnly(
+                blocks,
+                new TranslationEngine.Callback() {
+                    @Override
+                    public void onSuccess(
+                            List<OcrBlock> translated,
+                            boolean usedAi
+                    ) {
+                        showTranslationResult(
+                                translated,
+                                frameGeneration,
+                                "기기"
+                        );
+                    }
+
+                    @Override
+                    public void onError(
+                            String message
+                    ) {
+                        showTranslationError(
+                                message,
+                                frameGeneration
+                        );
+                    }
+                }
+        );
+    }
+
+    private void showTranslationResult(
+            List<OcrBlock> translated,
+            int frameGeneration,
+            String statusText
+    ) {
+        mainHandler.post(() -> {
+            if (!liveEnabled
+                    || !displayGate.isVisible()
+                    || !displayGate.canDisplay(frameGeneration)) {
+                return;
+            }
+
+            boolean visibleResult = false;
+
+            if (patchManager != null) {
+                patchManager.show(
+                        translated,
+                        captureWidth,
+                        captureHeight
+                );
+                activePatchBounds.clear();
+                activePatchBounds.addAll(
+                        patchManager.getPatchBounds()
+                );
+                visibleResult =
+                        patchManager.hasPatches();
+                cleanCaptureRequested =
+                        !visibleResult;
+            }
+
+            translationPending = false;
+
+            if (bubble != null) {
+                bubble.setText(
+                        visibleResult
+                                ? statusText
+                                : "!"
+                );
+            }
+
+            if (!visibleResult) {
+                long now =
+                        SystemClock.uptimeMillis();
+
+                if (now - lastErrorToastMs
+                        >= 15000L) {
+                    lastErrorToastMs = now;
+                    Toast.makeText(
+                            OverlayCaptureService.this,
+                            "번역은 끝났지만 화면 표시가 실패했어요. 다시 시도합니다.",
+                            Toast.LENGTH_LONG
+                    ).show();
+                }
+
+                translationRetryAfterMs =
+                        now + 1000L;
             }
         });
     }
 
-    private List<OcrBlock> orderRecognizedBlocks(
+    private void showTranslationError(
+            String message,
+            int frameGeneration
+    ) {
+        mainHandler.post(() -> {
+            if (!liveEnabled
+                    || !displayGate.isVisible()
+                    || !displayGate.canDisplay(frameGeneration)) {
+                return;
+            }
+
+            translationPending = false;
+
+            long now =
+                    SystemClock.uptimeMillis();
+
+            translationRetryAfterMs =
+                    now + 2500L;
+            cleanCaptureRequested = false;
+
+            if (bubble != null) {
+                bubble.setText("!");
+            }
+
+            if (now - lastErrorToastMs
+                    >= 15000L) {
+                lastErrorToastMs = now;
+                Toast.makeText(
+                        OverlayCaptureService.this,
+                        message,
+                        Toast.LENGTH_LONG
+                ).show();
+            }
+
+            if (captureHandler != null) {
+                captureHandler.postDelayed(() -> {
+                    if (!liveEnabled
+                            || !displayGate.isVisible()
+                            || !displayGate.canDisplay(frameGeneration)
+                            || translationPending) {
+                        return;
+                    }
+
+                    cleanCaptureRequested = true;
+                    requestFrame();
+                }, 2600L);
+            }
+        });
+    }
+
+    private List<OcrBlock> orderRecognizedBlocks(    private List<OcrBlock> orderRecognizedBlocks(
             List<OcrBlock> source
     ) {
         List<OcrBlock> ordered =
