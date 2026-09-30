@@ -147,14 +147,14 @@ public class TranslationEngine {
 
         boolean useContextModel =
                 localContextTranslator.isReady()
-                        && shouldUseContextModel(blocks);
+                        && !blocks.isEmpty();
 
-        if (!useContextModel) {
+        if (!localContextTranslator.isReady()) {
             localContextTranslator.resetContext();
         }
 
         String refinedKey =
-                "llm-v12:"
+                "llm-v13:"
                         + baseKey;
 
         if (useContextModel) {
@@ -214,7 +214,7 @@ public class TranslationEngine {
         }
 
         String fastKey =
-                "fast-v12:"
+                "fast-v13:"
                         + baseKey;
 
         List<String> fastCached =
@@ -497,8 +497,17 @@ public class TranslationEngine {
                     public void onError(
                             String message
                     ) {
-                        // Fast translation may already be visible. A deep refinement
-                        // failure must not tear it down.
+                        if (sequence
+                                != requestSequence.get()) {
+                            return;
+                        }
+
+                        if (!deepDelivered.get()) {
+                            callback.onError(
+                                    "4B 정밀 번역 실행 실패: "
+                                            + message
+                            );
+                        }
                     }
                 }
         );
