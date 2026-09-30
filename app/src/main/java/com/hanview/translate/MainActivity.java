@@ -130,6 +130,21 @@ public class MainActivity extends Activity {
         );
         root.addView(localInfo, spaced());
 
+        Button gptLabButton =
+                button("GPT 번역 검증실");
+        gptLabButton.setOnClickListener(v ->
+                startActivity(
+                        new Intent(
+                                this,
+                                GptTranslationLabActivity.class
+                        )
+                )
+        );
+        root.addView(
+                gptLabButton,
+                spaced()
+        );
+
         root.addView(sectionTitle("고급 문맥 번역"));
         localModelStatus = infoBox("");
         root.addView(localModelStatus, spaced());
