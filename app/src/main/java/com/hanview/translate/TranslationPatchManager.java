@@ -60,22 +60,26 @@ public class TranslationPatchManager {
             view.setTextColor(light ? Color.rgb(20, 20, 22) : Color.WHITE);
             GradientDrawable background = new GradientDrawable();
             // Match the sampled paper/bubble colour; opaque fill removes the original glyphs.
-            background.setColor(Color.rgb(Color.red(sampled), Color.green(sampled), Color.blue(sampled)));
-            background.setCornerRadius(0);
+            background.setColor(
+                    Color.argb(
+                            232,
+                            Color.red(sampled),
+                            Color.green(sampled),
+                            Color.blue(sampled)
+                    )
+            );
+            background.setCornerRadius(dp(4));
             view.setBackground(background);
 
             int width;
             if (vertical) {
-                // Korean expands horizontally much more than Japanese vertical text.
-                // Give manga paragraphs enough width to remain readable and to avoid
-                // measuring into an over-tall off-screen strip.
                 width = Math.min(
                         screenWidth,
                         Math.max(
-                                dp(96),
+                                dp(72),
                                 Math.min(
-                                        dp(168),
-                                        block.bounds.width() + dp(72)
+                                        dp(118),
+                                        block.bounds.width() + dp(44)
                                 )
                         )
                 );
@@ -112,17 +116,29 @@ public class TranslationPatchManager {
                 height = Math.min(screenHeight, Math.max(dp(28), view.getMeasuredHeight()));
             }
 
-            Rect placement = PatchPlacement.find(block.bounds.left - dp(4), block.bounds.top - dp(2), width,
-                    height, screenWidth, screenHeight, dp(2), patchBounds);
-
-            // Readability beats perfect collision avoidance: if all collision-free
-            // positions are occupied, place the translation over its own source
-            // instead of silently showing nothing.
-            if (placement == null) {
-                int left = Math.max(0, Math.min(block.bounds.left - dp(4), screenWidth - width));
-                int top = Math.max(0, Math.min(block.bounds.top - dp(2), screenHeight - height));
-                placement = new Rect(left, top, left + width, top + height);
-            }
+            // Keep every translation anchored to its source. Moving a paragraph
+            // to a distant "free" area makes manga unreadable and can cover artwork/UI.
+            int left = Math.max(
+                    0,
+                    Math.min(
+                            block.bounds.centerX() - width / 2,
+                            screenWidth - width
+                    )
+            );
+            int top = Math.max(
+                    0,
+                    Math.min(
+                            block.bounds.top - dp(2),
+                            screenHeight - height
+                    )
+            );
+            Rect placement =
+                    new Rect(
+                            left,
+                            top,
+                            left + width,
+                            top + height
+                    );
             int type = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
                     ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
                     : WindowManager.LayoutParams.TYPE_PHONE;
