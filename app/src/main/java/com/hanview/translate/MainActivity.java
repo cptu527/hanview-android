@@ -131,7 +131,7 @@ public class MainActivity extends Activity {
         root.addView(localModelStatus, spaced());
 
         localModelButton =
-                button("무료 문맥 모델 다운로드 (약 330MB)");
+                button("고품질 문맥 모델 다운로드 (약 1GB)");
         localModelButton.setOnClickListener(v ->
                 downloadLocalContextModel()
         );
@@ -141,7 +141,7 @@ public class MainActivity extends Activity {
         );
 
         TextView modelInfo = text(
-                "선택 기능입니다. 설치하면 화면 전체 OCR을 작은 언어모델이 한 번에 읽어 등장인물 말투와 앞뒤 문맥을 참고해 번역합니다. 모델은 휴대폰 안에서만 실행되며 ChatGPT/API 사용량이나 추가 요금이 없습니다.",
+                "선택 기능입니다. 약 1GB의 고품질 로컬 언어모델이 화면 전체 OCR을 한 장면으로 읽어 등장인물 말투·생략된 주어·앞뒤 문맥을 참고해 자연스러운 한국어로 번역합니다. 모델은 휴대폰 안에서만 실행되며 ChatGPT/API 사용량이나 추가 요금이 없습니다.",
                 12,
                 Color.rgb(112, 119, 132)
         );
@@ -270,7 +270,7 @@ public class MainActivity extends Activity {
 
         if (localModelStatus != null) {
             localModelStatus.setText(
-                    "문맥 모델 다운로드를 시작합니다. 약 330MB라 Wi-Fi 사용을 권장해요."
+                    "고품질 문맥 모델 다운로드를 시작합니다. 약 1GB라 Wi-Fi 사용을 권장해요."
             );
         }
 
@@ -311,7 +311,7 @@ public class MainActivity extends Activity {
                             if (localModelButton != null) {
                                 localModelButton.setEnabled(true);
                                 localModelButton.setText(
-                                        "무료 문맥 모델 다운로드 (약 330MB)"
+                                        "고품질 문맥 모델 다운로드 (약 1GB)"
                                 );
                             }
 
