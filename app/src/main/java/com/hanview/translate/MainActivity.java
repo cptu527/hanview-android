@@ -114,24 +114,24 @@ public class MainActivity extends Activity {
         root.addView(sub, subLp);
 
         TextView liveInfo = infoBox(
-                "무료 자연 번역\n" +
-                "• ChatGPT/API를 사용하지 않아 추가 사용량이나 요금이 없음\n" +
-                "• 일본어 세로 문장은 오른쪽→왼쪽 실제 읽는 순서대로 처리\n" +
-                "• 번역 뒤 한국어식 어순·구두점·상투적인 직역 표현을 한 번 더 정리\n" +
-                "• 중국어·일본어·영어 등 여러 언어를 기기에서 한국어로 번역\n" +
-                "• 한 번 번역한 페이지는 기기에 저장해 빠르게 다시 표시"
+                "ChatGPT 서버 자연 번역\n" +
+                "• ChatGPT 플랜이 연결되어 있으면 서버 번역을 실시간 번역의 기본 엔진으로 사용\n" +
+                "• 화면 글자 인식과 위치 계산은 기기에서 처리하고, 인식된 외국어 문장만 ChatGPT에 전송\n" +
+                "• 일본어 세로 문장과 여러 말풍선의 문맥을 함께 보고 자연스러운 한국어로 번역\n" +
+                "• 서버 번역이 일시적으로 실패하면 가벼운 기기 번역으로 자동 전환\n" +
+                "• 불안정했던 1.7B 로컬 LLM은 실시간 번역 경로에서 사용하지 않음"
         );
         root.addView(liveInfo);
 
         TextView localInfo = text(
-                "번역은 기기 내 무료 모델로 처리합니다. 최초 1회 언어 모델을 내려받을 때만 인터넷이 필요하고, 이후에는 ChatGPT 플랜이나 API를 사용하지 않습니다.",
+                "실시간 번역은 연결된 ChatGPT 서버를 우선 사용합니다. ChatGPT 연결이 없거나 서버 요청이 실패한 경우에만 기기 내 빠른 번역으로 대체합니다.",
                 12,
                 Color.rgb(112, 119, 132)
         );
         root.addView(localInfo, spaced());
 
         Button gptLabButton =
-                button("GPT 번역 검증실");
+                button("ChatGPT 연결 / 번역 테스트");
         gptLabButton.setOnClickListener(v ->
                 startActivity(
                         new Intent(
@@ -145,7 +145,7 @@ public class MainActivity extends Activity {
                 spaced()
         );
 
-        root.addView(sectionTitle("고급 문맥 번역"));
+        root.addView(sectionTitle("로컬 모델 (실시간 번역에는 사용 안 함)"));
         localModelStatus = infoBox("");
         root.addView(localModelStatus, spaced());
 
@@ -160,7 +160,7 @@ public class MainActivity extends Activity {
         );
 
         TextView modelInfo = text(
-                "선택 기능입니다. 약 2.6GB의 Qwen3.5 4B 로컬 언어모델이 화면 전체 OCR과 이전 페이지 문맥, 빠른 초벌번역을 함께 보고 오역을 고친 뒤 한국어 만화처럼 다시 다듬습니다. 모델은 휴대폰 안에서만 실행되며 ChatGPT/API 사용량이나 추가 요금이 없습니다. 최초 실행 최적화 캐시까지 고려해 저장공간은 6GB 이상 여유를 권장합니다.",
+                "기존 Qwen 로컬 모델은 보관하지만 실시간 번역에는 더 이상 사용하지 않습니다. 현재 실시간 번역은 ChatGPT 서버 우선, 기기 내 빠른 번역 대체 방식으로 동작합니다.",
                 12,
                 Color.rgb(112, 119, 132)
         );
@@ -195,7 +195,7 @@ public class MainActivity extends Activity {
                 "① 위 권한을 한 번 허용\n" +
                 "② 실시간 번역 시작 → 화면 공유 허용\n" +
                 "③ 원하는 앱으로 돌아가 그냥 스크롤\n" +
-                "④ ‘ON’은 대기, ‘OCR…’은 글자 인식, ‘번역…’은 번역 중, ‘초’는 빠른 초벌번역, ‘문’은 고급 문맥 보정 완료 상태"
+                "④ ‘ON’은 대기, ‘OCR…’은 글자 인식, ‘GPT…’은 ChatGPT 서버 번역 중, ‘GPT’는 서버 번역 완료, ‘기기’는 대체 번역 완료 상태"
         );
         LinearLayout.LayoutParams guideLp = spaced();
         guideLp.topMargin = dp(24);
@@ -218,7 +218,7 @@ public class MainActivity extends Activity {
         root.addView(updateButton, spaced());
 
         TextView privacy = text(
-                "화면은 번역을 위해서만 읽습니다. 번역은 기기 내 모델로 처리하며 ChatGPT/API로 화면 내용을 보내지 않습니다. 번역 레이어는 원래 앱을 직접 수정하지 않고 화면 위에 표시됩니다.",
+                "화면 캡처와 OCR은 기기에서 처리합니다. ChatGPT가 연결된 경우 OCR로 인식된 외국어 텍스트와 좌표 정보가 번역을 위해 ChatGPT 서버로 전송됩니다. 번역 레이어는 원래 앱을 직접 수정하지 않고 화면 위에 표시됩니다.",
                 12,
                 Color.rgb(112, 119, 132)
         );
