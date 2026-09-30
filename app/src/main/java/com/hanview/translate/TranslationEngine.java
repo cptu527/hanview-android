@@ -26,7 +26,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 public class TranslationEngine {
     public static final String PREFS = "hanview";
-    private static final String CACHE_PREFS = "viewnyang_local_natural_cache_v1";
+    private static final String CACHE_PREFS = "viewnyang_local_natural_cache_v2";
     private static final String CACHE_INDEX = "_index";
     private static final int MAX_PERSISTED_PAGES = 120;
 
@@ -43,6 +43,7 @@ public class TranslationEngine {
     private final Set<String> readyModels =
             ConcurrentHashMap.newKeySet();
     private final SharedPreferences persistentCache;
+    private final LocalContextTranslator localContextTranslator;
 
     private final Map<String, List<String>> pageCache =
             Collections.synchronizedMap(
@@ -62,6 +63,10 @@ public class TranslationEngine {
                 this.context.getSharedPreferences(
                         CACHE_PREFS,
                         Context.MODE_PRIVATE
+                );
+        localContextTranslator =
+                new LocalContextTranslator(
+                        this.context
                 );
 
         // Download the common models quietly once. After that, translation is
@@ -114,7 +119,12 @@ public class TranslationEngine {
                 inferPageLanguage(blocks);
 
         String key =
-                buildPageKey(
+                (
+                        localContextTranslator.isReady()
+                                ? "llm-v1:"
+                                : "local-v2:"
+                )
+                        + buildPageKey(
                         blocks,
                         pageHint
                 );
@@ -153,9 +163,7 @@ public class TranslationEngine {
             return;
         }
 
-        translateLocalNatural(
-                blocks,
-                pageHint,
+        Callback cacheAndReturn =
                 new Callback() {
                     @Override
                     public void onSuccess(
@@ -183,7 +191,7 @@ public class TranslationEngine {
 
                         callback.onSuccess(
                                 translated,
-                                false
+                                usedAi
                         );
                     }
 
@@ -192,6 +200,101 @@ public class TranslationEngine {
                             String message
                     ) {
                         callback.onError(message);
+                    }
+                };
+
+        if (localContextTranslator.isReady()) {
+            translateWithLocalContextModel(
+                    blocks,
+                    pageHint,
+                    cacheAndReturn
+            );
+        } else {
+            translateLocalNatural(
+                    blocks,
+                    pageHint,
+                    cacheAndReturn
+            );
+        }
+    }
+
+    private void translateWithLocalContextModel(
+            List<OcrBlock> blocks,
+            String pageHint,
+            Callback callback
+    ) {
+        localContextTranslator.translate(
+                blocks,
+                new LocalContextTranslator.Callback() {
+                    @Override
+                    public void onSuccess(
+                            Map<Integer, String> translations
+                    ) {
+                        List<OcrBlock> missing =
+                                new ArrayList<>();
+
+                        for (OcrBlock block : blocks) {
+                            String value =
+                                    translations.get(
+                                            block.id
+                                    );
+
+                            if (value == null
+                                    || value.trim().isEmpty()) {
+                                missing.add(block);
+                            } else {
+                                block.translated =
+                                        value.trim();
+                            }
+                        }
+
+                        if (missing.isEmpty()) {
+                            callback.onSuccess(
+                                    blocks,
+                                    true
+                            );
+                            return;
+                        }
+
+                        translateLocalNatural(
+                                missing,
+                                pageHint,
+                                new Callback() {
+                                    @Override
+                                    public void onSuccess(
+                                            List<OcrBlock> ignored,
+                                            boolean usedAi
+                                    ) {
+                                        callback.onSuccess(
+                                                blocks,
+                                                true
+                                        );
+                                    }
+
+                                    @Override
+                                    public void onError(
+                                            String message
+                                    ) {
+                                        callback.onSuccess(
+                                                blocks,
+                                                true
+                                        );
+                                    }
+                                }
+                        );
+                    }
+
+                    @Override
+                    public void onError(
+                            String message
+                    ) {
+                        // If the local LLM cannot initialize or parse one page,
+                        // keep live translation usable with the bundled translator.
+                        translateLocalNatural(
+                                blocks,
+                                pageHint,
+                                callback
+                        );
                     }
                 }
         );
@@ -1017,5 +1120,9 @@ public class TranslationEngine {
         translators.clear();
         readyModels.clear();
         pageCache.clear();
+
+        if (localContextTranslator != null) {
+            localContextTranslator.close();
+        }
     }
 }
