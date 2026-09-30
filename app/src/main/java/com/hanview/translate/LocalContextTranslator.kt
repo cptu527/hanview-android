@@ -72,17 +72,21 @@ class LocalContextTranslator(
                 val prompt = buildPrompt(snapshot)
 
                 val systemInstruction = Contents.of(
-                    "You are ViewNyang's professional Korean manga/localization translator. " +
-                            "Translate the supplied visible-page OCR into fluent natural Korean. " +
-                            "Use the entire page as context to resolve omitted Japanese subjects, pronouns, " +
-                            "relationships, tone, honorifics and consistent speech level. " +
-                            "For Japanese vertical manga, reading order is generally top-to-bottom within a column " +
-                            "and right-to-left across columns. Repair obvious OCR spacing/noise only when clear. " +
-                            "Do not summarize, explain, censor, moralize or invent facts. " +
-                            "Keep names, numbers and meaning faithful. Avoid Japanese literal syntax and needless " +
-                            "나는/당신/그것 repetition. Return ONLY JSON in exactly this shape: " +
-                            "{\"translations\":[{\"id\":0,\"text\":\"...\"}]}. " +
-                            "Return every input id exactly once."
+                    "/no_think\n" +
+                            "너는 일본 만화·소설을 한국어로 현지화하는 전문 번역가다. " +
+                            "화면에 보이는 모든 OCR 문장을 하나의 장면으로 읽고 번역한다. " +
+                            "일본어의 생략된 주어·목적어, 인물 관계, 높임말, 말투, 감정, 앞뒤 문장을 함께 고려하되 " +
+                            "원문에 없는 설정이나 사실을 만들지 않는다. " +
+                            "직역체를 피하고 실제 한국어 대사와 소설 문장처럼 자연스럽게 쓴다. " +
+                            "특히 '나는/당신/그것/것이다' 같은 불필요한 대명사와 일본어식 문형 반복을 줄인다. " +
+                            "존댓말과 반말은 장면 안에서 일관되게 유지한다. " +
+                            "고유명사·숫자·의미는 보존하고 검열하거나 요약하지 않는다. " +
+                            "세로쓰기 일본 만화는 같은 세로열 안에서 위에서 아래로, 열은 오른쪽에서 왼쪽 순서로 읽는다. " +
+                            "OCR 오탈자는 문맥상 명백한 경우만 바로잡는다. " +
+                            "설명이나 사고 과정은 절대 출력하지 말고, 번역문만 반환한다. " +
+                            "출력은 반드시 다음 JSON 형식만 사용한다: " +
+                            "{\"translations\":[{\"id\":0,\"text\":\"자연스러운 한국어 번역\"}]}. " +
+                            "입력된 모든 id를 정확히 한 번씩 반환한다."
                 )
 
                 val config = ConversationConfig(
@@ -94,7 +98,7 @@ class LocalContextTranslator(
                     .use { conversation ->
                         conversation.sendMessage(
                             prompt,
-                            maxOutputToken = 700
+                            maxOutputToken = 900
                         ).toString()
                     }
 
@@ -128,7 +132,7 @@ class LocalContextTranslator(
                 EngineConfig(
                     modelPath = file.absolutePath,
                     backend = Backend.CPU(),
-                    maxNumTokens = 1280,
+                    maxNumTokens = 2048,
                     cacheDir = appContext.cacheDir.absolutePath
                 )
             )
@@ -221,11 +225,13 @@ class LocalContextTranslator(
     companion object {
         private const val MODEL_DIR = "local_llm"
         private const val MODEL_NAME =
-            "qwen3_0.6b_nothink_q4_block32_ekv1280.litertlm"
+            "Qwen3-1.7B_dynamic_wi4b32_afp32.litertlm"
         private const val MODEL_URL =
-            "https://huggingface.co/litert-community/Qwen3-0.6B-int4/resolve/main/" +
+            "https://huggingface.co/litert-community/Qwen3-1.7B/resolve/main/" +
                     MODEL_NAME + "?download=true"
-        private const val MIN_MODEL_BYTES = 250_000_000L
+        private const val LEGACY_MODEL_NAME =
+            "qwen3_0.6b_nothink_q4_block32_ekv1280.litertlm"
+        private const val MIN_MODEL_BYTES = 850_000_000L
 
         @JvmStatic
         fun modelFile(context: Context): File {
@@ -335,6 +341,12 @@ class LocalContextTranslator(
                         part.copyTo(target, overwrite = true)
                         part.delete()
                     }
+
+                    val legacy = File(
+                        target.parentFile,
+                        LEGACY_MODEL_NAME
+                    )
+                    if (legacy.exists()) legacy.delete()
 
                     callback.onProgress(100)
                     callback.onSuccess()
