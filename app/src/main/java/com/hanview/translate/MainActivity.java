@@ -145,7 +145,7 @@ public class MainActivity extends Activity {
         );
 
         TextView modelInfo = text(
-                "선택 기능입니다. 약 2.6GB의 4B 고품질 로컬 언어모델이 화면 전체 OCR을 한 장면으로 읽어 등장인물 말투·생략된 주어·앞뒤 문맥을 참고해 자연스러운 한국어로 번역합니다. 모델은 휴대폰 안에서만 실행되며 ChatGPT/API 사용량이나 추가 요금이 없습니다.",
+                "선택 기능입니다. 약 2.6GB의 Qwen3.5 4B 로컬 언어모델이 화면 전체 OCR과 이전 페이지 문맥, 빠른 초벌번역을 함께 보고 오역을 고친 뒤 한국어 만화처럼 다시 다듬습니다. 모델은 휴대폰 안에서만 실행되며 ChatGPT/API 사용량이나 추가 요금이 없습니다. 최초 실행 최적화 캐시까지 고려해 저장공간은 6GB 이상 여유를 권장합니다.",
                 12,
                 Color.rgb(112, 119, 132)
         );
@@ -274,7 +274,7 @@ public class MainActivity extends Activity {
 
         if (localModelStatus != null) {
             localModelStatus.setText(
-                    "고품질 문맥 모델 다운로드를 시작합니다. 약 2.6GB라 Wi-Fi 사용을 권장해요."
+                    "Qwen3.5 4B 문맥 모델 다운로드를 시작합니다. 약 2.6GB이며 Wi-Fi와 6GB 이상의 여유공간을 권장해요."
             );
         }
 
