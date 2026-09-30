@@ -42,6 +42,12 @@ import javax.crypto.KeyGenerator;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.GCMParameterSpec;
 
+import okhttp3.MediaType;
+import okhttp3.Request;
+import okhttp3.RequestBody;
+import okhttp3.Response;
+import okhttp3.ResponseBody;
+
 public class ChatGptPlanClient {
     private static final String PREFS =
             "viewnyang_chatgpt";
@@ -724,168 +730,182 @@ public class ChatGptPlanClient {
             String accessToken,
             JSONObject request
     ) throws Exception {
-        HttpURLConnection conn =
-                (HttpURLConnection)
-                        new URL(
-                                API_BASE + "/responses"
-                        ).openConnection();
-
-        conn.setRequestMethod("POST");
-        conn.setConnectTimeout(10000);
-        conn.setReadTimeout(45000);
-        conn.setDoOutput(true);
-        conn.setRequestProperty(
-                "Authorization",
-                "Bearer " + accessToken
-        );
-        conn.setRequestProperty(
-                "Content-Type",
-                "application/json; charset=utf-8"
-        );
-        conn.setRequestProperty(
-                "Accept",
-                "text/event-stream"
-        );
-
-        byte[] payload =
-                request.toString().getBytes(
-                        StandardCharsets.UTF_8
+        RequestBody body =
+                RequestBody.create(
+                        request.toString(),
+                        MediaType.parse(
+                                "application/json; charset=utf-8"
+                        )
                 );
 
-        try (OutputStream out =
-                     conn.getOutputStream()) {
-            out.write(payload);
-        }
+        Request httpRequest =
+                new Request.Builder()
+                        .url(
+                                API_BASE
+                                        + "/responses"
+                        )
+                        .header(
+                                "Authorization",
+                                "Bearer "
+                                        + accessToken
+                        )
+                        .header(
+                                "Accept",
+                                "text/event-stream"
+                        )
+                        .post(body)
+                        .build();
 
-        int code =
-                conn.getResponseCode();
+        try (Response response =
+                     OpenAiHttp.client()
+                             .newCall(httpRequest)
+                             .execute()) {
+            int code =
+                    response.code();
 
-        if (code < 200 || code >= 300) {
-            String body =
-                    readAll(
-                            conn.getErrorStream()
-                    );
+            ResponseBody responseBody =
+                    response.body();
 
-            throw new IllegalStateException(
-                    openAiErrorMessage(
-                            code,
-                            body
-                    )
-            );
-        }
+            if (code < 200
+                    || code >= 300) {
+                String errorBody =
+                        responseBody == null
+                                ? ""
+                                : responseBody.string();
 
-        StringBuilder output =
-                new StringBuilder();
-        boolean completed = false;
+                throw new IllegalStateException(
+                        openAiErrorMessage(
+                                code,
+                                errorBody
+                        )
+                );
+            }
 
-        try (BufferedReader reader =
-                     new BufferedReader(
-                             new InputStreamReader(
-                                     conn.getInputStream(),
-                                     StandardCharsets.UTF_8
-                             )
-                     )) {
-            String line;
+            if (responseBody == null) {
+                throw new IllegalStateException(
+                        "ChatGPT 응답 본문이 비어 있어요."
+                );
+            }
 
-            while ((line = reader.readLine())
-                    != null) {
-                if (!line.startsWith("data:")) {
-                    continue;
-                }
+            StringBuilder output =
+                    new StringBuilder();
+            boolean completed = false;
 
-                String data =
-                        line.substring(5).trim();
+            try (BufferedReader reader =
+                         new BufferedReader(
+                                 responseBody.charStream()
+                         )) {
+                String line;
 
-                if (data.isEmpty()
-                        || "[DONE]".equals(data)) {
-                    continue;
-                }
-
-                JSONObject event;
-
-                try {
-                    event =
-                            new JSONObject(data);
-                } catch (Exception ignored) {
-                    continue;
-                }
-
-                String type =
-                        event.optString(
-                                "type",
-                                ""
-                        );
-
-                if ("response.output_text.delta"
-                        .equals(type)) {
-                    output.append(
-                            event.optString(
-                                    "delta",
-                                    ""
-                            )
-                    );
-                } else if ("response.completed"
-                        .equals(type)) {
-                    completed = true;
-                } else if ("response.failed"
-                        .equals(type)) {
-                    JSONObject response =
-                            event.optJSONObject(
-                                    "response"
-                            );
-
-                    JSONObject error =
-                            response == null
-                                    ? null
-                                    : response.optJSONObject(
-                                    "error"
-                            );
-
-                    String errorCode =
-                            error == null
-                                    ? ""
-                                    : error.optString(
-                                    "code",
-                                    ""
-                            );
-
-                    if ("subscription_sharing_usage_limit_exceeded"
-                            .equals(errorCode)
-                            || "subscription_sharing_usage_unavailable"
-                            .equals(errorCode)) {
-                        throw new IllegalStateException(
-                                "ChatGPT 플랜 사용 한도에 도달했어요."
-                        );
+                while ((line = reader.readLine())
+                        != null) {
+                    if (!line.startsWith(
+                            "data:"
+                    )) {
+                        continue;
                     }
 
-                    throw new IllegalStateException(
-                            "ChatGPT 응답이 중단됐어요."
-                    );
-                } else if ("response.incomplete"
-                        .equals(type)) {
-                    throw new IllegalStateException(
-                            "ChatGPT 응답이 완성되지 않았어요."
-                    );
+                    String data =
+                            line.substring(5)
+                                    .trim();
+
+                    if (data.isEmpty()
+                            || "[DONE]".equals(
+                            data
+                    )) {
+                        continue;
+                    }
+
+                    JSONObject event;
+
+                    try {
+                        event =
+                                new JSONObject(
+                                        data
+                                );
+                    } catch (Exception ignored) {
+                        continue;
+                    }
+
+                    String type =
+                            event.optString(
+                                    "type",
+                                    ""
+                            );
+
+                    if ("response.output_text.delta"
+                            .equals(type)) {
+                        output.append(
+                                event.optString(
+                                        "delta",
+                                        ""
+                                )
+                        );
+                    } else if ("response.completed"
+                            .equals(type)) {
+                        completed = true;
+                    } else if ("response.failed"
+                            .equals(type)) {
+                        JSONObject responseObject =
+                                event.optJSONObject(
+                                        "response"
+                                );
+
+                        JSONObject error =
+                                responseObject == null
+                                        ? null
+                                        : responseObject
+                                        .optJSONObject(
+                                                "error"
+                                        );
+
+                        String errorCode =
+                                error == null
+                                        ? ""
+                                        : error.optString(
+                                        "code",
+                                        ""
+                                );
+
+                        if ("subscription_sharing_usage_limit_exceeded"
+                                .equals(errorCode)
+                                || "subscription_sharing_usage_unavailable"
+                                .equals(errorCode)) {
+                            throw new IllegalStateException(
+                                    "ChatGPT 플랜 사용 한도에 도달했어요."
+                            );
+                        }
+
+                        throw new IllegalStateException(
+                                "ChatGPT 응답이 중단됐어요."
+                        );
+                    } else if ("response.incomplete"
+                            .equals(type)) {
+                        throw new IllegalStateException(
+                                "ChatGPT 응답이 완성되지 않았어요."
+                        );
+                    }
                 }
             }
+
+            if (!completed) {
+                throw new IllegalStateException(
+                        "ChatGPT 응답이 끝까지 도착하지 않았어요."
+                );
+            }
+
+            String result =
+                    output.toString()
+                            .trim();
+
+            if (result.isEmpty()) {
+                throw new IllegalStateException(
+                        "ChatGPT 번역 결과가 비어 있어요."
+                );
+            }
+
+            return result;
         }
-
-        if (!completed) {
-            throw new IllegalStateException(
-                    "ChatGPT 응답이 끝까지 도착하지 않았어요."
-            );
-        }
-
-        String result =
-                output.toString().trim();
-
-        if (result.isEmpty()) {
-            throw new IllegalStateException(
-                    "ChatGPT 번역 결과가 비어 있어요."
-            );
-        }
-
-        return result;
     }
 
     private Map<Integer, String> parseTranslations(
@@ -964,36 +984,45 @@ public class ChatGptPlanClient {
             return saved;
         }
 
-        HttpURLConnection conn =
-                (HttpURLConnection)
-                        new URL(
-                                API_BASE + "/models"
-                        ).openConnection();
+        Request httpRequest =
+                new Request.Builder()
+                        .url(
+                                API_BASE
+                                        + "/models"
+                        )
+                        .header(
+                                "Authorization",
+                                "Bearer "
+                                        + accessToken
+                        )
+                        .header(
+                                "Accept",
+                                "application/json"
+                        )
+                        .get()
+                        .build();
 
-        conn.setRequestMethod("GET");
-        conn.setConnectTimeout(8000);
-        conn.setReadTimeout(10000);
-        conn.setRequestProperty(
-                "Authorization",
-                "Bearer " + accessToken
-        );
-        conn.setRequestProperty(
-                "Accept",
-                "application/json"
-        );
+        String body;
+        int code;
 
-        int code =
-                conn.getResponseCode();
+        try (Response response =
+                     OpenAiHttp.client()
+                             .newCall(httpRequest)
+                             .execute()) {
+            code =
+                    response.code();
 
-        String body =
-                readAll(
-                        code >= 200
-                                && code < 300
-                                ? conn.getInputStream()
-                                : conn.getErrorStream()
-                );
+            ResponseBody responseBody =
+                    response.body();
 
-        if (code < 200 || code >= 300) {
+            body =
+                    responseBody == null
+                            ? ""
+                            : responseBody.string();
+        }
+
+        if (code < 200
+                || code >= 300) {
             throw new IllegalStateException(
                     openAiErrorMessage(
                             code,
@@ -1273,58 +1302,59 @@ public class ChatGptPlanClient {
             form.append(
                     URLEncoder.encode(
                             pair[0],
-                            StandardCharsets.UTF_8.name()
+                            StandardCharsets.UTF_8
+                                    .name()
                     )
             );
             form.append('=');
             form.append(
                     URLEncoder.encode(
                             pair[1],
-                            StandardCharsets.UTF_8.name()
+                            StandardCharsets.UTF_8
+                                    .name()
                     )
             );
         }
 
-        HttpURLConnection conn =
-                (HttpURLConnection)
-                        new URL(endpoint)
-                                .openConnection();
-
-        conn.setRequestMethod("POST");
-        conn.setConnectTimeout(10000);
-        conn.setReadTimeout(15000);
-        conn.setDoOutput(true);
-        conn.setRequestProperty(
-                "Accept",
-                "application/json"
-        );
-        conn.setRequestProperty(
-                "Content-Type",
-                "application/x-www-form-urlencoded"
-        );
-
-        byte[] payload =
-                form.toString().getBytes(
-                        StandardCharsets.UTF_8
+        RequestBody requestBody =
+                RequestBody.create(
+                        form.toString(),
+                        MediaType.parse(
+                                "application/x-www-form-urlencoded"
+                        )
                 );
 
-        try (OutputStream out =
-                     conn.getOutputStream()) {
-            out.write(payload);
+        Request request =
+                new Request.Builder()
+                        .url(endpoint)
+                        .header(
+                                "Accept",
+                                "application/json"
+                        )
+                        .post(requestBody)
+                        .build();
+
+        String body;
+        int code;
+
+        try (Response response =
+                     OpenAiHttp.client()
+                             .newCall(request)
+                             .execute()) {
+            code =
+                    response.code();
+
+            ResponseBody responseBody =
+                    response.body();
+
+            body =
+                    responseBody == null
+                            ? ""
+                            : responseBody.string();
         }
 
-        int code =
-                conn.getResponseCode();
-
-        String body =
-                readAll(
-                        code >= 200
-                                && code < 300
-                                ? conn.getInputStream()
-                                : conn.getErrorStream()
-                );
-
-        if (code < 200 || code >= 300) {
+        if (code < 200
+                || code >= 300) {
             throw new IllegalStateException(
                     openAiErrorMessage(
                             code,
@@ -1774,40 +1804,47 @@ public class ChatGptPlanClient {
             String endpoint,
             String accessToken
     ) throws Exception {
-        HttpURLConnection conn =
-                (HttpURLConnection)
-                        new URL(endpoint)
-                                .openConnection();
-
-        conn.setRequestMethod("GET");
-        conn.setConnectTimeout(8000);
-        conn.setReadTimeout(10000);
-        conn.setRequestProperty(
-                "Accept",
-                "application/json"
-        );
+        Request.Builder builder =
+                new Request.Builder()
+                        .url(endpoint)
+                        .header(
+                                "Accept",
+                                "application/json"
+                        )
+                        .get();
 
         if (accessToken != null
                 && !accessToken.isEmpty()) {
-            conn.setRequestProperty(
+            builder.header(
                     "Authorization",
                     "Bearer "
                             + accessToken
             );
         }
 
-        int code =
-                conn.getResponseCode();
+        String body;
+        int code;
 
-        String body =
-                readAll(
-                        code >= 200
-                                && code < 300
-                                ? conn.getInputStream()
-                                : conn.getErrorStream()
-                );
+        try (Response response =
+                     OpenAiHttp.client()
+                             .newCall(
+                                     builder.build()
+                             )
+                             .execute()) {
+            code =
+                    response.code();
 
-        if (code < 200 || code >= 300) {
+            ResponseBody responseBody =
+                    response.body();
+
+            body =
+                    responseBody == null
+                            ? ""
+                            : responseBody.string();
+        }
+
+        if (code < 200
+                || code >= 300) {
             throw new IllegalStateException(
                     "ChatGPT 서버 연결 오류 ("
                             + code
