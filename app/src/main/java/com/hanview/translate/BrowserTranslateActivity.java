@@ -8,14 +8,17 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Rect;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.text.method.ScrollingMovementMethod;
 import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.View;
+import android.view.WindowInsets;
 import android.view.inputmethod.InputMethodManager;
 import android.webkit.CookieManager;
 import android.webkit.WebChromeClient;
+import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
@@ -64,6 +67,13 @@ public class BrowserTranslateActivity extends Activity {
                 new JapaneseTextRecognizerOptions.Builder().build()
         );
 
+        getWindow().setStatusBarColor(
+                Color.rgb(18, 19, 22)
+        );
+        getWindow().setNavigationBarColor(
+                Color.rgb(18, 19, 22)
+        );
+
         setContentView(buildUi());
 
         String initial =
@@ -81,9 +91,36 @@ public class BrowserTranslateActivity extends Activity {
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(Color.rgb(18, 19, 22));
 
+        // Android 15+ draws apps edge-to-edge by default. Keep the browser
+        // controls below the status bar instead of underneath it.
+        root.setOnApplyWindowInsetsListener(
+                (view, insets) -> {
+                    int top =
+                            insets.getSystemWindowInsetTop();
+                    int bottom =
+                            insets.getSystemWindowInsetBottom();
+
+                    view.setPadding(
+                            0,
+                            top,
+                            0,
+                            bottom
+                    );
+
+                    return insets;
+                }
+        );
+
+        root.post(root::requestApplyInsets);
+
         LinearLayout addressRow = new LinearLayout(this);
         addressRow.setOrientation(LinearLayout.HORIZONTAL);
-        addressRow.setPadding(dp(8), dp(8), dp(8), dp(4));
+        addressRow.setPadding(
+                dp(8),
+                dp(10),
+                dp(8),
+                dp(6)
+        );
 
         Button back = smallButton("‹");
         back.setOnClickListener(v -> {
@@ -231,6 +268,7 @@ public class BrowserTranslateActivity extends Activity {
         translationLayer = new FrameLayout(this);
         translationLayer.setClickable(false);
         translationLayer.setFocusable(false);
+        translationLayer.setVisibility(View.GONE);
         webContainer.addView(
                 translationLayer,
                 new FrameLayout.LayoutParams(
@@ -263,6 +301,40 @@ public class BrowserTranslateActivity extends Activity {
         settings.setUseWideViewPort(true);
         settings.setLoadWithOverviewMode(false);
         settings.setMediaPlaybackRequiresUserGesture(true);
+        settings.setJavaScriptCanOpenWindowsAutomatically(true);
+        settings.setSupportMultipleWindows(false);
+        settings.setCacheMode(
+                WebSettings.LOAD_DEFAULT
+        );
+
+        if (Build.VERSION.SDK_INT >= 21) {
+            settings.setMixedContentMode(
+                    WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+            );
+        }
+
+        // Some manga sites reset connections from embedded WebViews. Present
+        // the same Chromium engine as a normal mobile browser instead of the
+        // special "; wv" WebView user agent.
+        String defaultAgent =
+                WebSettings.getDefaultUserAgent(
+                        this
+                );
+
+        String browserAgent =
+                defaultAgent
+                        .replace(
+                                "; wv",
+                                ""
+                        )
+                        .replace(
+                                "Version/4.0 ",
+                                ""
+                        );
+
+        settings.setUserAgentString(
+                browserAgent
+        );
 
         CookieManager cookies = CookieManager.getInstance();
         cookies.setAcceptCookie(true);
@@ -322,6 +394,32 @@ public class BrowserTranslateActivity extends Activity {
                                         : "ChatGPT 연결이 필요합니다."
                         );
                     }
+
+                    @Override
+                    public void onReceivedError(
+                            WebView view,
+                            WebResourceRequest request,
+                            WebResourceError error
+                    ) {
+                        if (Build.VERSION.SDK_INT >= 23
+                                && request != null
+                                && request.isForMainFrame()) {
+                            String description =
+                                    error == null
+                                            ? ""
+                                            : String.valueOf(
+                                            error.getDescription()
+                                    );
+
+                            status.setText(
+                                    description.toLowerCase().contains(
+                                            "connection reset"
+                                    )
+                                            ? "연결이 초기화됐어요. 일반 브라우저처럼 다시 접속할 수 있게 조정했습니다. 새로고침해 주세요."
+                                            : "페이지 연결 오류 · 새로고침해 주세요."
+                            );
+                        }
+                    }
                 }
         );
 
@@ -360,7 +458,19 @@ public class BrowserTranslateActivity extends Activity {
             String url
     ) {
         clearTranslations();
-        webView.loadUrl(url);
+
+        java.util.HashMap<String, String> headers =
+                new java.util.HashMap<>();
+
+        headers.put(
+                "Accept-Language",
+                "ja,en-US;q=0.9,en;q=0.8,ko;q=0.7"
+        );
+
+        webView.loadUrl(
+                url,
+                headers
+        );
         address.setText(url);
     }
 
@@ -604,6 +714,10 @@ public class BrowserTranslateActivity extends Activity {
             return;
         }
 
+        translationLayer.setVisibility(
+                View.VISIBLE
+        );
+
         if (verticalCount >= 2
                 || translated.size() >= 5) {
             showMangaPanel(
@@ -714,11 +828,9 @@ public class BrowserTranslateActivity extends Activity {
                         webContainer.getHeight() * 42 / 100
                 )
         );
-        panel.setVerticalScrollBarEnabled(true);
-        panel.setMovementMethod(
-                new ScrollingMovementMethod()
-        );
-        panel.setClickable(true);
+        panel.setVerticalScrollBarEnabled(false);
+        panel.setClickable(false);
+        panel.setFocusable(false);
 
         FrameLayout.LayoutParams lp =
                 new FrameLayout.LayoutParams(
@@ -834,6 +946,9 @@ public class BrowserTranslateActivity extends Activity {
     private void clearTranslations() {
         if (translationLayer != null) {
             translationLayer.removeAllViews();
+            translationLayer.setVisibility(
+                    View.GONE
+            );
         }
     }
 
