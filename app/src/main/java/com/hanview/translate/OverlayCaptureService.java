@@ -79,8 +79,11 @@ public class OverlayCaptureService extends Service {
     private volatile boolean liveEnabled = false;
     private volatile boolean captureRequested = false;
     private volatile boolean processing = false;
+    private volatile boolean translationPending = false;
+    private final TranslationDisplayGate displayGate = new TranslationDisplayGate();
+    private volatile long translationRetryAfterMs = 0L;
+    private long lastErrorToastMs = -15000L;
     private volatile boolean cleanCaptureRequested = true;
-    private volatile int generation = 0;
 
     private int[] lastMonitorFingerprint = null;
     private final List<Rect> activePatchBounds =
@@ -108,7 +111,9 @@ public class OverlayCaptureService extends Service {
                     // above the system overview.
                     suspendTranslationUntilMs =
                             SystemClock.uptimeMillis() + 1200L;
-                    generation++;
+                    displayGate.invalidate();
+                    translationPending = false;
+                    if (translationEngine != null) translationEngine.cancelPending();
                     captureRequested = false;
                     processing = false;
                     cleanCaptureRequested = true;
@@ -130,7 +135,7 @@ public class OverlayCaptureService extends Service {
                 return;
             }
 
-            if (SystemClock.uptimeMillis()
+            if (!displayGate.isVisible() || SystemClock.uptimeMillis()
                     < suspendTranslationUntilMs) {
                 captureHandler.postDelayed(
                         this,
@@ -228,7 +233,7 @@ public class OverlayCaptureService extends Service {
             if (mediaProjection == null) {
                 startProjection(resultCode, resultData);
                 liveEnabled = true;
-                generation++;
+                displayGate.invalidate();
                 cleanCaptureRequested = true;
                 lastMonitorFingerprint = null;
                 showBubble();
@@ -324,6 +329,17 @@ public class OverlayCaptureService extends Service {
                     public void onStop() {
                         mainHandler.post(() -> stopSelf());
                     }
+
+                    @Override
+                    public void onCapturedContentVisibilityChanged(boolean isVisible) {
+                        // Single-app sharing can keep producing the old app's pixels after
+                        // another app covers it. Pixel differences cannot detect that case.
+                        displayGate.setVisible(isVisible);
+                        invalidateCapturedPage();
+                        mainHandler.post(() -> {
+                            if (bubble != null) bubble.setVisibility(isVisible ? View.VISIBLE : View.GONE);
+                        });
+                    }
                 },
                 captureHandler
         );
@@ -345,19 +361,19 @@ public class OverlayCaptureService extends Service {
                         if (image == null
                                 || !captureRequested
                                 || processing
-                                || !liveEnabled) {
+                                || !liveEnabled
+                                || !displayGate.isVisible()) {
                             return;
                         }
 
                         captureRequested = false;
                         processing = true;
 
-                        final int frameGeneration = generation;
+                        final int frameGeneration = displayGate.current();
                         final boolean cleanFrame = cleanCaptureRequested;
                         Bitmap bitmap = imageToBitmap(image);
 
-                        if (!cleanFrame && patchManager != null
-                                && patchManager.hasPatches()) {
+                        if (!cleanFrame) {
                             handleMonitorFrame(
                                     bitmap,
                                     frameGeneration
@@ -400,16 +416,16 @@ public class OverlayCaptureService extends Service {
     }
 
     private void requestFrame() {
-        if (!liveEnabled || processing || captureRequested) {
+        if (!liveEnabled || !displayGate.isVisible() || processing || captureRequested) {
             return;
         }
 
         // When translations are visible, first grab a monitor frame without
         // hiding anything. Only if the page actually moved do we clear the old
         // text and request one clean OCR frame.
-        cleanCaptureRequested =
-                patchManager == null
-                        || !patchManager.hasPatches();
+        cleanCaptureRequested = !translationPending
+                && SystemClock.uptimeMillis() >= translationRetryAfterMs
+                && (patchManager == null || !patchManager.hasPatches());
 
         captureRequested = true;
     }
@@ -419,7 +435,7 @@ public class OverlayCaptureService extends Service {
             int frameGeneration
     ) {
         if (!liveEnabled
-                || frameGeneration != generation) {
+                || !displayGate.canDisplay(frameGeneration)) {
             bitmap.recycle();
             processing = false;
             return;
@@ -452,41 +468,39 @@ public class OverlayCaptureService extends Service {
             return;
         }
 
-        // The screen really moved. Drop stale coordinates once, then OCR the
-        // clean underlying screen. Static pages no longer blink every cycle.
-        generation++;
-        final int newGeneration = generation;
+        invalidateCapturedPage();
+    }
 
-        mainHandler.post(() -> {
-            if (patchManager != null) {
-                patchManager.clear();
-            }
-        });
-
+    private void invalidateCapturedPage() {
+        displayGate.invalidate();
+        final int newGeneration = displayGate.current();
+        translationPending = false;
+        translationRetryAfterMs = 0L;
+        if (translationEngine != null) translationEngine.cancelPending();
         lastMonitorFingerprint = null;
         activePatchBounds.clear();
         cleanCaptureRequested = true;
-        processing = false;
         captureRequested = false;
-
-        captureHandler.postDelayed(
-                () -> {
-                    if (liveEnabled
-                            && generation == newGeneration
-                            && !processing) {
-                        captureRequested = true;
-                    }
-                },
-                26L
-        );
+        // Keep capture blocked until the old windows have actually been removed.
+        processing = true;
+        mainHandler.post(() -> {
+            if (patchManager != null) patchManager.clear();
+            if (bubble != null) styleBubble(liveEnabled);
+            if (captureHandler == null) return;
+            captureHandler.postDelayed(() -> {
+                if (displayGate.current() != newGeneration) return;
+                processing = false;
+                if (liveEnabled && displayGate.isVisible()) requestFrame();
+            }, 40L);
+        });
     }
 
     private int[] makeFingerprint(
             Bitmap bitmap,
             List<Rect> ignoreBounds
     ) {
-        final int columns = 12;
-        final int rows = 18;
+        final int columns = 24;
+        final int rows = 40;
         int[] out = new int[columns * rows];
 
         int startY =
@@ -675,7 +689,6 @@ public class OverlayCaptureService extends Service {
                     if (!isCurrentGeneration(
                             frameGeneration
                     )) {
-                        processing = false;
                         safeRecycle(bitmap);
                         return;
                     }
@@ -717,7 +730,6 @@ public class OverlayCaptureService extends Service {
                     if (!isCurrentGeneration(
                             frameGeneration
                     )) {
-                        processing = false;
                         safeRecycle(bitmap);
                         return;
                     }
@@ -767,7 +779,7 @@ public class OverlayCaptureService extends Service {
             int frameGeneration
     ) {
         return liveEnabled
-                && frameGeneration == generation;
+                && displayGate.canDisplay(frameGeneration);
     }
 
     private void mergeCandidates(
@@ -867,11 +879,10 @@ public class OverlayCaptureService extends Service {
             int frameGeneration
     ) {
         if (!liveEnabled
-                || frameGeneration != generation) {
+                || !displayGate.canDisplay(frameGeneration)) {
             if (!screenshot.isRecycled()) {
                 screenshot.recycle();
             }
-            processing = false;
             return;
         }
 
@@ -926,16 +937,10 @@ public class OverlayCaptureService extends Service {
 
         activePatchBounds.clear();
 
-        for (OcrBlock block : normalized) {
-            activePatchBounds.add(
-                    new Rect(block.bounds)
-            );
-        }
-
         lastMonitorFingerprint =
                 makeFingerprint(
                         screenshot,
-                        activePatchBounds
+                        Collections.emptyList()
                 );
 
         if (!screenshot.isRecycled()) {
@@ -954,49 +959,42 @@ public class OverlayCaptureService extends Service {
             return;
         }
 
-        translationEngine.translate(
-                normalized,
-                new TranslationEngine.Callback() {
-                    // These flags are only read/written on the main thread.
-                    private boolean previewShown;
-                    private boolean finished;
-
-                    private void showResult(List<OcrBlock> translated, boolean finalResult) {
-                        mainHandler.post(() -> {
-                            if (!liveEnabled || frameGeneration != generation || finished) return;
-                            if (finalResult) finished = true;
-                            if (patchManager != null) {
-                                patchManager.show(translated, captureWidth, captureHeight);
-                                activePatchBounds.clear();
-                                activePatchBounds.addAll(patchManager.getPatchBounds());
-                                // Expanded/moved boxes must be masked in the monitor too.
-                                lastMonitorFingerprint = null;
-                                cleanCaptureRequested = !patchManager.hasPatches();
-                            }
-                            // Once a preview is visible, page monitoring can resume while AI works.
-                            // A late final callback must not release another frame's processing lock.
-                            if (!previewShown) processing = false;
-                            previewShown = true;
-                        });
+        // OCR is complete. Network translation must never hold the capture/monitor lock.
+        translationPending = true;
+        cleanCaptureRequested = false;
+        processing = false;
+        mainHandler.post(() -> {
+            if (bubble != null && liveEnabled && displayGate.canDisplay(frameGeneration)) bubble.setText("GPT…");
+        });
+        translationEngine.translate(normalized, new TranslationEngine.Callback() {
+            @Override public void onSuccess(List<OcrBlock> translated, boolean usedAi) {
+                mainHandler.post(() -> {
+                    if (!liveEnabled || !displayGate.isVisible() || !displayGate.canDisplay(frameGeneration)) return;
+                    if (patchManager != null) {
+                        patchManager.show(translated, captureWidth, captureHeight);
+                        activePatchBounds.clear();
+                        activePatchBounds.addAll(patchManager.getPatchBounds());
+                        cleanCaptureRequested = !patchManager.hasPatches();
                     }
-
-                    @Override public void onPreview(List<OcrBlock> translated) {
-                        showResult(translated, false);
+                    translationPending = false;
+                    if (bubble != null) bubble.setText("GPT");
+                });
+            }
+            @Override public void onError(String message) {
+                mainHandler.post(() -> {
+                    if (!liveEnabled || !displayGate.isVisible() || !displayGate.canDisplay(frameGeneration)) return;
+                    translationPending = false;
+                    translationRetryAfterMs = SystemClock.uptimeMillis() + 15000L;
+                    cleanCaptureRequested = false;
+                    if (bubble != null) bubble.setText("!");
+                    long now = SystemClock.uptimeMillis();
+                    if (now - lastErrorToastMs >= 15000L) {
+                        lastErrorToastMs = now;
+                        Toast.makeText(OverlayCaptureService.this, message, Toast.LENGTH_LONG).show();
                     }
-
-                    @Override public void onSuccess(List<OcrBlock> translated, boolean usedAi) {
-                        showResult(translated, true);
-                    }
-
-                    @Override public void onError(String message) {
-                        mainHandler.post(() -> {
-                            if (frameGeneration != generation || finished) return;
-                            finished = true;
-                            if (!previewShown) processing = false;
-                        });
-                    }
-                }
-        );
+                });
+            }
+        });
     }
 
     private List<OcrBlock> mergeVerticalColumns(
@@ -1766,7 +1764,10 @@ public class OverlayCaptureService extends Service {
     }
 
     private void setLiveEnabled(boolean enabled) {
-        generation++;
+        displayGate.invalidate();
+        translationPending = false;
+        translationRetryAfterMs = 0L;
+        if (translationEngine != null) translationEngine.cancelPending();
         captureRequested = false;
         processing = false;
         cleanCaptureRequested = true;
@@ -1806,7 +1807,10 @@ public class OverlayCaptureService extends Service {
     @Override
     public void onDestroy() {
         liveEnabled = false;
-        generation++;
+        displayGate.invalidate();
+        translationPending = false;
+        translationRetryAfterMs = 0L;
+        if (translationEngine != null) translationEngine.cancelPending();
         captureRequested = false;
         processing = false;
         cleanCaptureRequested = true;

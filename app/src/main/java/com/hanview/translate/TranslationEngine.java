@@ -1,19 +1,8 @@
 package com.hanview.translate;
 
 import android.content.Context;
-import android.content.SharedPreferences;
-
-import com.google.mlkit.common.model.DownloadConditions;
-import com.google.mlkit.nl.languageid.LanguageIdentification;
-import com.google.mlkit.nl.languageid.LanguageIdentifier;
-import com.google.mlkit.nl.translate.TranslateLanguage;
-import com.google.mlkit.nl.translate.Translation;
-import com.google.mlkit.nl.translate.Translator;
-import com.google.mlkit.nl.translate.TranslatorOptions;
-
 import org.json.JSONArray;
 import org.json.JSONObject;
-
 import java.io.BufferedReader;
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -27,238 +16,84 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 public class TranslationEngine {
     public static final String PREFS = "hanview";
     public static final String KEY_ENDPOINT = "translation_endpoint";
-
     public interface Callback {
         void onSuccess(List<OcrBlock> blocks, boolean usedAi);
         void onError(String message);
-        default void onPreview(List<OcrBlock> blocks) { }
     }
-
     private final Context context;
-    private final ExecutorService networkExecutor = Executors.newSingleThreadExecutor();
-    private final LanguageIdentifier languageIdentifier = LanguageIdentification.getClient();
     private final ChatGptPlanClient chatGptPlanClient;
-    private final Map<String, Translator> translators = new ConcurrentHashMap<>();
-    private final Set<String> readyModels = ConcurrentHashMap.newKeySet();
-
-    private final Map<String, String> translationCache =
-            Collections.synchronizedMap(
-                    new LinkedHashMap<String, String>(512, 0.75f, true) {
-                        @Override
-                        protected boolean removeEldestEntry(Map.Entry<String, String> eldest) {
-                            return size() > 1200;
-                        }
-                    }
-            );
+    private final ExecutorService networkExecutor = Executors.newSingleThreadExecutor();
+    // Cache whole pages: a fragment must not reuse a translation from a different conversation.
+    private final Map<String, List<String>> pageCache = Collections.synchronizedMap(
+            new LinkedHashMap<String, List<String>>(24, 0.75f, true) {
+                @Override protected boolean removeEldestEntry(Map.Entry<String, List<String>> entry) {
+                    return size() > 24;
+                }
+            });
 
     public TranslationEngine(Context context) {
         this.context = context.getApplicationContext();
-        this.chatGptPlanClient =
-                new ChatGptPlanClient(this.context);
-        // Prepare the local preview before the first captured page.
-        warmUp("ja");
-        warmUp("en");
-        warmUp("zh");
-    }
-
-    public static void prewarmCommon(Context context) {
-        String[] common = new String[]{"zh", "en", "ja"};
-
-        for (String tag : common) {
-            String source = TranslateLanguage.fromLanguageTag(tag);
-            if (source == null || TranslateLanguage.KOREAN.equals(source)) {
-                continue;
-            }
-
-            TranslatorOptions options =
-                    new TranslatorOptions.Builder()
-                            .setSourceLanguage(source)
-                            .setTargetLanguage(TranslateLanguage.KOREAN)
-                            .build();
-
-            Translator translator = Translation.getClient(options);
-            translator.downloadModelIfNeeded(new DownloadConditions.Builder().build())
-                    .addOnCompleteListener(task -> translator.close());
-        }
+        chatGptPlanClient = new ChatGptPlanClient(this.context);
     }
 
     public void translate(List<OcrBlock> blocks, Callback callback) {
-        if (blocks.isEmpty()) {
-            callback.onSuccess(blocks, false);
+        if (blocks.isEmpty()) { callback.onSuccess(blocks, true); return; }
+        boolean connected = chatGptPlanClient.hasPlanAccess();
+        String endpoint = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .getString(KEY_ENDPOINT, "").trim();
+        if (!connected && endpoint.isEmpty()) {
+            callback.onError("뷰냥에서 ChatGPT를 연결해 주세요. 기기 번역으로 대신 표시하지 않습니다.");
             return;
         }
-
-        boolean chatGptPreferred =
-                chatGptPlanClient.hasPlanAccess();
-
-        List<OcrBlock> pending = new ArrayList<>();
+        StringBuilder signature = new StringBuilder(connected ? "gpt:" : endpoint + ":");
         for (OcrBlock block : blocks) {
-            String cached =
-                    getCached(
-                            chatGptPreferred
-                                    ? "ai"
-                                    : "local",
-                            block.original
-                    );
-            if (cached != null) {
-                block.translated = cached;
-            } else {
-                pending.add(block);
-            }
+            signature.append(block.original.length()).append(':').append(block.original)
+                    .append('@').append(block.bounds.left).append(',').append(block.bounds.top)
+                    .append(',').append(block.verticalSource).append(';');
         }
-
-        if (pending.isEmpty()) {
-            callback.onSuccess(blocks, false);
+        String key = signature.toString();
+        List<String> cached = pageCache.get(key);
+        if (cached != null && cached.size() == blocks.size()) {
+            for (int i = 0; i < blocks.size(); i++) blocks.get(i).translated = cached.get(i);
+            callback.onSuccess(blocks, true);
             return;
         }
-
-        SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
-        String endpoint = prefs.getString(KEY_ENDPOINT, "").trim();
-
-        AtomicBoolean completed = new AtomicBoolean(false);
-        Callback mergeBack = new Callback() {
-            @Override
-            public void onSuccess(List<OcrBlock> translatedPending, boolean usedAi) {
-                completed.set(true);
-                for (OcrBlock block : translatedPending) {
-                    if (block.translated != null
-                            && !block.translated.trim().isEmpty()
-                            && !block.translated.equals(block.original)) {
-                        putCached(
-                                usedAi
-                                        ? "ai"
-                                        : "local",
-                                block.original,
-                                block.translated
-                        );
-                    }
-                }
-                callback.onSuccess(blocks, usedAi);
+        Callback result = new Callback() {
+            @Override public void onSuccess(List<OcrBlock> translated, boolean usedAi) {
+                List<String> values = new ArrayList<>();
+                for (OcrBlock block : translated) values.add(block.translated);
+                pageCache.put(key, values);
+                callback.onSuccess(translated, true);
             }
-
-            @Override
-            public void onError(String message) {
-                completed.set(true);
-                callback.onError(message);
-            }
+            @Override public void onError(String message) { callback.onError(message); }
         };
-
-        if (chatGptPreferred || !endpoint.isEmpty()) {
-            // Separate objects prevent a late local result overwriting the AI result.
-            List<OcrBlock> preview = new ArrayList<>();
-            List<OcrBlock> localPending = new ArrayList<>();
-            for (OcrBlock block : blocks) {
-                OcrBlock copy = new OcrBlock(block.id, block.original, block.bounds);
-                copy.copyVisualStyleFrom(block);
-                String cached = getCached("local", block.original);
-                if (block.translated != null && !block.translated.equals(block.original)) {
-                    copy.translated = block.translated;
-                } else if (cached != null) {
-                    copy.translated = cached;
-                } else {
-                    localPending.add(copy);
-                }
-                preview.add(copy);
-            }
-            if (localPending.isEmpty()) {
-                callback.onPreview(preview);
-            } else {
-                translateLocalAuto(localPending, new Callback() {
-                    @Override public void onSuccess(List<OcrBlock> local, boolean usedAi) {
-                        for (OcrBlock block : local) {
-                            if (block.translated != null && !block.translated.equals(block.original))
-                                putCached("local", block.original, block.translated);
-                        }
-                        if (!completed.get()) callback.onPreview(preview);
-                    }
-                    @Override public void onError(String message) { /* AI is still running. */ }
-                });
-            }
-        }
-
-        if (chatGptPreferred) {
-            translateWithChatGpt(
-                    pending,
-                    mergeBack
-            );
-        } else if (!endpoint.isEmpty()) {
-            translateRemote(endpoint, pending, mergeBack);
-        } else {
-            translateLocalAuto(pending, mergeBack);
-        }
+        if (connected) translateWithChatGpt(blocks, result);
+        else translateRemote(endpoint, blocks, result);
     }
 
-    private void translateWithChatGpt(
-            List<OcrBlock> blocks,
-            Callback callback
-    ) {
-        chatGptPlanClient.translate(
-                blocks,
-                new ChatGptPlanClient.TranslationCallback() {
-                    @Override
-                    public void onSuccess(
-                            Map<Integer, String> translations,
-                            String model
-                    ) {
-                        int translatedCount = 0;
-
-                        for (OcrBlock block : blocks) {
-                            String translated =
-                                    translations.get(
-                                            block.id
-                                    );
-
-                            if (translated != null
-                                    && !translated.trim().isEmpty()
-                                    && !translated.trim().equals(
-                                    block.original
-                            )) {
-                                block.translated =
-                                        translated.trim();
-                                translatedCount++;
-                            }
-                        }
-
-                        if (translatedCount == 0) {
-                            // A valid GPT session should normally translate at least
-                            // one foreign block. Keep the screen usable if it did not.
-                            translateLocalAuto(
-                                    blocks,
-                                    callback
-                            );
-                            return;
-                        }
-
-                        callback.onSuccess(
-                                blocks,
-                                true
-                        );
-                    }
-
-                    @Override
-                    public void onError(
-                            String message
-                    ) {
-                        // No extra billing fallback: when ChatGPT plan use is
-                        // temporarily unavailable or its limit is reached, fall
-                        // back to the bundled offline translator.
-                        translateLocalAuto(
-                                blocks,
-                                callback
-                        );
+    private void translateWithChatGpt(List<OcrBlock> blocks, Callback callback) {
+        chatGptPlanClient.translate(blocks, new ChatGptPlanClient.TranslationCallback() {
+            @Override public void onSuccess(Map<Integer, String> translations, String model) {
+                for (OcrBlock block : blocks) {
+                    String value = translations.get(block.id);
+                    if (value == null || value.trim().isEmpty()) {
+                        callback.onError("GPT 번역이 일부 누락됐어요. 다시 시도해 주세요.");
+                        return;
                     }
                 }
-        );
+                for (OcrBlock block : blocks) block.translated = translations.get(block.id).trim();
+                callback.onSuccess(blocks, true);
+            }
+            @Override public void onError(String message) {
+                callback.onError("GPT 번역 실패: " + message);
+            }
+        });
     }
 
     private void translateRemote(
@@ -267,6 +102,7 @@ public class TranslationEngine {
             Callback callback
     ) {
         networkExecutor.execute(() -> {
+            HttpURLConnection conn = null;
             try {
                 JSONObject root = new JSONObject();
                 root.put("source", "auto");
@@ -282,7 +118,7 @@ public class TranslationEngine {
                 }
                 root.put("items", items);
 
-                HttpURLConnection conn =
+                conn =
                         (HttpURLConnection) new URL(endpoint).openConnection();
                 conn.setRequestMethod("POST");
                 conn.setConnectTimeout(5000);
@@ -327,329 +163,11 @@ public class TranslationEngine {
 
                 callback.onSuccess(blocks, true);
             } catch (Exception remoteError) {
-                translateLocalAuto(blocks, callback);
+                callback.onError("AI 번역 서버에 연결하지 못했어요. 잠시 후 다시 시도해 주세요.");
+            } finally {
+                if (conn != null) conn.disconnect();
             }
         });
-    }
-
-    private void translateLocalAuto(List<OcrBlock> blocks, Callback callback) {
-        Map<String, List<OcrBlock>> groups = new ConcurrentHashMap<>();
-        List<OcrBlock> unknown = Collections.synchronizedList(new ArrayList<>());
-
-        String pageHint =
-                inferPageLanguage(blocks);
-
-        for (OcrBlock block : blocks) {
-            String quick =
-                    quickLanguageGuess(
-                            block.original,
-                            pageHint
-                    );
-
-            if ("ko".equals(quick)) {
-                block.translated = block.original;
-            } else if (quick != null) {
-                groups.computeIfAbsent(
-                        quick,
-                        key -> Collections.synchronizedList(new ArrayList<>())
-                ).add(block);
-            } else {
-                unknown.add(block);
-            }
-        }
-
-        if (unknown.isEmpty()) {
-            translateGroups(groups, blocks, callback);
-            return;
-        }
-
-        AtomicInteger remaining = new AtomicInteger(unknown.size());
-
-        for (OcrBlock block : unknown) {
-            languageIdentifier.identifyLanguage(block.original)
-                    .addOnSuccessListener(languageTag -> {
-                        String tag = languageTag;
-
-                        if (tag == null || "und".equals(tag)) {
-                            tag = looksMostlyLatin(block.original) ? "en" : null;
-                        }
-
-                        if (tag != null && !"ko".equals(tag)) {
-                            groups.computeIfAbsent(
-                                    tag,
-                                    key -> Collections.synchronizedList(new ArrayList<>())
-                            ).add(block);
-                        } else {
-                            block.translated = block.original;
-                        }
-
-                        if (remaining.decrementAndGet() == 0) {
-                            translateGroups(groups, blocks, callback);
-                        }
-                    })
-                    .addOnFailureListener(e -> {
-                        if (looksMostlyLatin(block.original)) {
-                            groups.computeIfAbsent(
-                                    "en",
-                                    key -> Collections.synchronizedList(new ArrayList<>())
-                            ).add(block);
-                        } else {
-                            block.translated = block.original;
-                        }
-
-                        if (remaining.decrementAndGet() == 0) {
-                            translateGroups(groups, blocks, callback);
-                        }
-                    });
-        }
-    }
-
-    private void translateGroups(
-            Map<String, List<OcrBlock>> groups,
-            List<OcrBlock> allBlocks,
-            Callback callback
-    ) {
-        if (groups.isEmpty()) {
-            callback.onError("번역 가능한 외국어를 찾지 못했어요.");
-            return;
-        }
-
-        AtomicInteger remainingGroups = new AtomicInteger(groups.size());
-        AtomicInteger translatedCount = new AtomicInteger(0);
-
-        for (Map.Entry<String, List<OcrBlock>> entry : groups.entrySet()) {
-            translateGroup(
-                    entry.getKey(),
-                    entry.getValue(),
-                    count -> {
-                        translatedCount.addAndGet(count);
-
-                        if (remainingGroups.decrementAndGet() == 0) {
-                            if (translatedCount.get() == 0) {
-                                callback.onError("번역 모델을 준비하지 못했어요.");
-                            } else {
-                                callback.onSuccess(allBlocks, false);
-                            }
-                        }
-                    }
-            );
-        }
-    }
-
-    private interface GroupResult {
-        void done(int translatedCount);
-    }
-
-    private void translateGroup(
-            String languageTag,
-            List<OcrBlock> blocks,
-            GroupResult callback
-    ) {
-        String source = TranslateLanguage.fromLanguageTag(languageTag);
-
-        if (source == null || TranslateLanguage.KOREAN.equals(source)) {
-            callback.done(0);
-            return;
-        }
-
-        Translator translator = getTranslator(source);
-
-        Runnable runTranslations = () -> {
-            AtomicInteger remaining = new AtomicInteger(blocks.size());
-            AtomicInteger successes = new AtomicInteger(0);
-
-            for (OcrBlock block : blocks) {
-                translator.translate(block.original)
-                        .addOnSuccessListener(text -> {
-                            if (text != null
-                                    && !text.trim().isEmpty()
-                                    && !text.trim().equals(block.original)) {
-                                block.translated = text.trim();
-                                successes.incrementAndGet();
-                            }
-
-                            if (remaining.decrementAndGet() == 0) {
-                                callback.done(successes.get());
-                            }
-                        })
-                        .addOnFailureListener(e -> {
-                            if (remaining.decrementAndGet() == 0) {
-                                callback.done(successes.get());
-                            }
-                        });
-            }
-        };
-
-        if (readyModels.contains(source)) {
-            runTranslations.run();
-            return;
-        }
-
-        translator.downloadModelIfNeeded(new DownloadConditions.Builder().build())
-                .addOnSuccessListener(unused -> {
-                    readyModels.add(source);
-                    runTranslations.run();
-                })
-                .addOnFailureListener(e -> callback.done(0));
-    }
-
-    private Translator getTranslator(String source) {
-        Translator existing = translators.get(source);
-        if (existing != null) {
-            return existing;
-        }
-
-        TranslatorOptions options =
-                new TranslatorOptions.Builder()
-                        .setSourceLanguage(source)
-                        .setTargetLanguage(TranslateLanguage.KOREAN)
-                        .build();
-
-        Translator created = Translation.getClient(options);
-        Translator raced = translators.putIfAbsent(source, created);
-
-        if (raced != null) {
-            created.close();
-            return raced;
-        }
-
-        return created;
-    }
-
-    private void warmUp(String languageTag) {
-        String source = TranslateLanguage.fromLanguageTag(languageTag);
-        if (source == null || TranslateLanguage.KOREAN.equals(source)) return;
-
-        Translator translator = getTranslator(source);
-        translator.downloadModelIfNeeded(new DownloadConditions.Builder().build())
-                .addOnSuccessListener(unused -> readyModels.add(source));
-    }
-
-    private String quickLanguageGuess(
-            String value,
-            String pageHint
-    ) {
-        boolean hangul = false;
-        boolean kana = false;
-        boolean han = false;
-        boolean devanagari = false;
-
-        for (int i = 0; i < value.length(); i++) {
-            char c = value.charAt(i);
-
-            if ((c >= '\uAC00' && c <= '\uD7A3')
-                    || (c >= '\u1100' && c <= '\u11FF')) {
-                hangul = true;
-            }
-
-            if (c >= '\u3040' && c <= '\u30FF') {
-                kana = true;
-            }
-
-            if ((c >= '\u3400' && c <= '\u4DBF')
-                    || (c >= '\u4E00' && c <= '\u9FFF')) {
-                han = true;
-            }
-
-            if (c >= '\u0900' && c <= '\u097F') {
-                devanagari = true;
-            }
-        }
-
-        if (hangul && !kana && !han && !devanagari) return "ko";
-        if (kana) return "ja";
-
-        // On a Japanese manga/page, OCR often returns a kanji-only fragment.
-        // Treat those fragments as Japanese when nearby text contains kana,
-        // otherwise ML Kit sends them through Chinese and produces nonsense.
-        if (han && "ja".equals(pageHint)) return "ja";
-        if (han) return "zh";
-        if (devanagari) return "hi";
-        return null;
-    }
-
-    private String inferPageLanguage(
-            List<OcrBlock> blocks
-    ) {
-        int kana = 0;
-        int han = 0;
-
-        for (OcrBlock block : blocks) {
-            String value = block.original;
-            if (value == null) {
-                continue;
-            }
-
-            for (int i = 0; i < value.length(); i++) {
-                char c = value.charAt(i);
-
-                if (c >= '\u3040'
-                        && c <= '\u30FF') {
-                    kana++;
-                } else if ((c >= '\u3400'
-                        && c <= '\u4DBF')
-                        || (c >= '\u4E00'
-                        && c <= '\u9FFF')) {
-                    han++;
-                }
-            }
-        }
-
-        if (kana >= 2) {
-            return "ja";
-        }
-
-        if (han >= 2) {
-            return "zh";
-        }
-
-        return null;
-    }
-
-    private boolean looksMostlyLatin(String value) {
-        int latin = 0;
-        int letters = 0;
-
-        for (int i = 0; i < value.length(); i++) {
-            char c = value.charAt(i);
-
-            if (Character.isLetter(c)) {
-                letters++;
-
-                if ((c >= 'A' && c <= 'Z')
-                        || (c >= 'a' && c <= 'z')
-                        || (c >= '\u00C0' && c <= '\u024F')) {
-                    latin++;
-                }
-            }
-        }
-
-        return letters > 0 && latin * 2 >= letters;
-    }
-
-    private String getCached(
-            String mode,
-            String source
-    ) {
-        return translationCache.get(
-                mode + ":" + normalize(source)
-        );
-    }
-
-    private void putCached(
-            String mode,
-            String source,
-            String translated
-    ) {
-        translationCache.put(
-                mode + ":" + normalize(source),
-                translated
-        );
-    }
-
-    private String normalize(String value) {
-        if (value == null) return "";
-        return value.trim().replaceAll("\\s+", " ");
     }
 
     private static String readAll(InputStream in) throws Exception {
@@ -668,15 +186,11 @@ public class TranslationEngine {
         return sb.toString();
     }
 
+    public void cancelPending() { chatGptPlanClient.cancelTranslations(); }
+
     public void close() {
-        languageIdentifier.close();
-
-        for (Translator translator : translators.values()) {
-            translator.close();
-        }
-
-        translators.clear();
-        readyModels.clear();
+        pageCache.clear();
         networkExecutor.shutdownNow();
+        chatGptPlanClient.cancelTranslations();
     }
 }
