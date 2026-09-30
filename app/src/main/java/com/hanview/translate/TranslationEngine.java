@@ -75,9 +75,9 @@ public class TranslationEngine {
         warmUp("en");
         warmUp("zh");
 
-        // If the large manga model is installed, begin loading it quietly.
-        // Fast ML Kit translation remains available while this warms up.
-        localContextTranslator.warmUp();
+        // Do not load the multi-GB context model here. Shopping/Chinese pages
+        // must stay lightweight; the large model is loaded lazily only after
+        // an actual Japanese vertical-manga page has been detected.
     }
 
     public static void prewarmCommon(Context context) {
