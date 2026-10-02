@@ -529,12 +529,10 @@ public class MainActivity extends Activity {
                     return false;
 
                 case MotionEvent.ACTION_UP:
-                    if (multiTouch) {
-                        return false;
-                    }
-
-                    // A stationary/short tap never reaches the webpage.
-                    return !moved;
+                    // Let the page receive the completed tap. The injected
+                    // capture-phase guard below blocks ordinary taps and only
+                    // whitelists explicit previous/list/next episode controls.
+                    return false;
 
                 case MotionEvent.ACTION_CANCEL:
                     moved = false;
@@ -674,6 +672,135 @@ public class MainActivity extends Activity {
                 (function () {
                   window.__viewNyangLocked = %s;
 
+                  function closestControl(target) {
+                    if (!target || !target.closest) return null;
+                    return target.closest('a,button,[role="button"],[onclick]');
+                  }
+
+                  function normalizeControlText(el) {
+                    if (!el) return '';
+                    var parts = [
+                      el.innerText || '',
+                      el.textContent || '',
+                      el.getAttribute && el.getAttribute('aria-label') || '',
+                      el.getAttribute && el.getAttribute('title') || '',
+                      el.getAttribute && el.getAttribute('rel') || '',
+                      el.id || '',
+                      typeof el.className === 'string' ? el.className : ''
+                    ];
+                    return parts.join(' ').replace(/\\s+/g, ' ').trim().toLowerCase();
+                  }
+
+                  function isEpisodeHref(href) {
+                    if (!href) return false;
+                    try {
+                      var u = new URL(href, location.href);
+                      return /^\\/webtoon\\/\\d+\\/[^/]+\\/?$/.test(u.pathname);
+                    } catch (e) {
+                      return false;
+                    }
+                  }
+
+                  function isAllowedReaderControl(target) {
+                    var el = closestControl(target);
+                    if (!el) return false;
+
+                    if (el.getAttribute && el.getAttribute('data-viewnyang-allow') === '1') {
+                      return true;
+                    }
+
+                    var anchor = el.tagName === 'A'
+                      ? el
+                      : (el.closest ? el.closest('a') : null);
+
+                    var href = anchor ? anchor.href : (el.href || '');
+                    var text = normalizeControlText(el);
+
+                    var namedNavigation =
+                      /(다음화|다음 화|다음|next|이전화|이전 화|이전|prev|previous|목록|list)/i.test(text);
+
+                    if (namedNavigation && (isEpisodeHref(href) || /목록|list/i.test(text))) {
+                      return true;
+                    }
+
+                    // Some bottom reader controls are icon-only.
+                    // Only allow icon-only episode links very near the real
+                    // bottom of the document, never the floating toolbars.
+                    if (isEpisodeHref(href)) {
+                      var rect = el.getBoundingClientRect();
+                      var pageTop = rect.top + window.scrollY;
+                      var docHeight = Math.max(
+                        document.documentElement.scrollHeight,
+                        document.body ? document.body.scrollHeight : 0
+                      );
+                      var iconish = /^[\\s>›»→<‹«←]+$/.test(
+                        (el.innerText || el.textContent || '').trim()
+                      );
+
+                      if (iconish && pageTop > docHeight - Math.max(1600, window.innerHeight * 1.5)) {
+                        return true;
+                      }
+                    }
+
+                    return false;
+                  }
+
+                  function stop(event) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    if (event.stopImmediatePropagation) {
+                      event.stopImmediatePropagation();
+                    }
+                  }
+
+                  function shouldBlock(event) {
+                    return window.__viewNyangLocked &&
+                      !isAllowedReaderControl(event.target);
+                  }
+
+                  function hideFloatingReaderControls() {
+                    if (!window.__viewNyangLocked) return;
+
+                    var all = document.querySelectorAll('body *');
+
+                    for (var i = 0; i < all.length; i++) {
+                      var el = all[i];
+
+                      if (!el || !el.getBoundingClientRect) continue;
+                      if (el.id === 'viewnyang-reader-style') continue;
+
+                      var style = getComputedStyle(el);
+                      if (style.display === 'none' || style.visibility === 'hidden') continue;
+
+                      var pos = style.position;
+                      if (pos !== 'fixed' && pos !== 'sticky') continue;
+
+                      var rect = el.getBoundingClientRect();
+                      if (rect.width < 1 || rect.height < 1) continue;
+
+                      var controlCount = el.querySelectorAll(
+                        'a,button,[role="button"],[onclick]'
+                      ).length;
+
+                      if (controlCount < 3) continue;
+
+                      var rightRail =
+                        rect.width <= 260 &&
+                        rect.height >= 120 &&
+                        rect.right >= window.innerWidth - 60;
+
+                      var bottomRail =
+                        rect.height <= 120 &&
+                        rect.width >= 220 &&
+                        rect.bottom >= window.innerHeight - 180;
+
+                      if (rightRail || bottomRail) {
+                        el.setAttribute('data-viewnyang-hidden-floating', '1');
+                        el.style.setProperty('display', 'none', 'important');
+                      }
+                    }
+                  }
+
                   if (!window.__viewNyangGuardInstalled) {
                     window.__viewNyangGuardInstalled = true;
 
@@ -703,14 +830,6 @@ public class MainActivity extends Activity {
                     var pointerStartY = 0;
                     var pointerMoved = false;
 
-                    var stop = function (event) {
-                      event.preventDefault();
-                      event.stopPropagation();
-                      if (event.stopImmediatePropagation) {
-                        event.stopImmediatePropagation();
-                      }
-                    };
-
                     document.addEventListener('touchstart', function (event) {
                       if (!window.__viewNyangLocked || event.touches.length !== 1) return;
                       touchStartX = event.touches[0].clientX;
@@ -724,12 +843,8 @@ public class MainActivity extends Activity {
                       var dx = Math.abs(event.touches[0].clientX - touchStartX);
                       var dy = Math.abs(event.touches[0].clientY - touchStartY);
 
-                      if (dx > 8 || dy > 8) {
-                        touchMoved = true;
-                      }
+                      if (dx > 8 || dy > 8) touchMoved = true;
 
-                      // Block horizontal swipe gestures while keeping vertical
-                      // scroll and multi-touch pinch zoom available.
                       if (dx > 12 && dx > dy * 1.15) {
                         stop(event);
                       }
@@ -737,7 +852,7 @@ public class MainActivity extends Activity {
 
                     document.addEventListener('touchend', function (event) {
                       if (!window.__viewNyangLocked) return;
-                      if (!touchMoved) {
+                      if (!touchMoved && shouldBlock(event)) {
                         stop(event);
                       }
                     }, true);
@@ -755,9 +870,7 @@ public class MainActivity extends Activity {
                       var dx = Math.abs(event.clientX - pointerStartX);
                       var dy = Math.abs(event.clientY - pointerStartY);
 
-                      if (dx > 8 || dy > 8) {
-                        pointerMoved = true;
-                      }
+                      if (dx > 8 || dy > 8) pointerMoved = true;
 
                       if (dx > 12 && dx > dy * 1.15) {
                         stop(event);
@@ -766,19 +879,20 @@ public class MainActivity extends Activity {
 
                     document.addEventListener('pointerup', function (event) {
                       if (!window.__viewNyangLocked || event.pointerType !== 'touch') return;
-                      if (!pointerMoved) {
+                      if (!pointerMoved && shouldBlock(event)) {
                         stop(event);
                       }
                     }, true);
 
-                    var stopTap = function (event) {
-                      if (!window.__viewNyangLocked) return;
-                      stop(event);
+                    var blockOrdinaryActivation = function (event) {
+                      if (shouldBlock(event)) {
+                        stop(event);
+                      }
                     };
 
-                    document.addEventListener('click', stopTap, true);
-                    document.addEventListener('dblclick', stopTap, true);
-                    document.addEventListener('contextmenu', stopTap, true);
+                    document.addEventListener('click', blockOrdinaryActivation, true);
+                    document.addEventListener('dblclick', blockOrdinaryActivation, true);
+                    document.addEventListener('contextmenu', blockOrdinaryActivation, true);
 
                     var style = document.getElementById('viewnyang-reader-style');
                     if (!style) {
@@ -789,7 +903,35 @@ public class MainActivity extends Activity {
 
                     style.textContent =
                       'html{scroll-behavior:auto!important;overscroll-behavior-x:none!important;touch-action:pan-y pinch-zoom!important;}' +
-                      'body{-webkit-tap-highlight-color:transparent!important;overscroll-behavior-x:none!important;touch-action:pan-y pinch-zoom!important;}';
+                      'body{-webkit-tap-highlight-color:transparent!important;overscroll-behavior-x:none!important;touch-action:pan-y pinch-zoom!important;}' +
+                      '[data-viewnyang-hidden-floating="1"]{display:none!important;}';
+
+                    var hideScheduled = false;
+                    function scheduleHideFloating() {
+                      if (hideScheduled) return;
+                      hideScheduled = true;
+                      requestAnimationFrame(function () {
+                        hideScheduled = false;
+                        hideFloatingReaderControls();
+                      });
+                    }
+
+                    window.addEventListener('scroll', scheduleHideFloating, {passive:true});
+                    window.addEventListener('resize', scheduleHideFloating, {passive:true});
+
+                    var floatingObserver = new MutationObserver(scheduleHideFloating);
+                    floatingObserver.observe(document.documentElement, {
+                      childList: true,
+                      subtree: true,
+                      attributes: true,
+                      attributeFilter: ['class','style']
+                    });
+
+                    setTimeout(hideFloatingReaderControls, 0);
+                    setTimeout(hideFloatingReaderControls, 400);
+                    setTimeout(hideFloatingReaderControls, 1200);
+                  } else {
+                    hideFloatingReaderControls();
                   }
                 })();
                 """.formatted(locked);
