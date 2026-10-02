@@ -58,6 +58,7 @@ public class MainActivity extends Activity {
     private boolean mainFrameLoadFailed = false;
 
     private SharedPreferences prefs;
+    private AppUpdateManager updateManager;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -74,6 +75,7 @@ public class MainActivity extends Activity {
 
         prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
         touchSlop = ViewConfiguration.get(this).getScaledTouchSlop();
+        updateManager = new AppUpdateManager(this);
 
         setContentView(buildUi());
         configureWebView();
@@ -88,6 +90,11 @@ public class MainActivity extends Activity {
         } else {
             webView.restoreState(savedInstanceState);
         }
+
+        getWindow().getDecorView().postDelayed(
+                () -> updateManager.checkForUpdate(false),
+                1200
+        );
     }
 
     private View buildUi() {
@@ -296,6 +303,7 @@ public class MainActivity extends Activity {
         menu.getMenu().add("현재 주소 복사");
         menu.getMenu().add("클립보드 주소로 이동");
         menu.getMenu().add("캐시·쿠키 지우고 새로고침");
+        menu.getMenu().add("앱 업데이트 확인");
         menu.getMenu().add("외부 브라우저로 열기");
 
         menu.setOnMenuItemClickListener(item -> {
@@ -326,6 +334,13 @@ public class MainActivity extends Activity {
 
             if ("캐시·쿠키 지우고 새로고침".equals(title)) {
                 clearSiteDataAndReload();
+                return true;
+            }
+
+            if ("앱 업데이트 확인".equals(title)) {
+                if (updateManager != null) {
+                    updateManager.checkForUpdate(true);
+                }
                 return true;
             }
 
@@ -658,6 +673,14 @@ public class MainActivity extends Activity {
     }
 
     @Override
+    protected void onResume() {
+        super.onResume();
+        if (updateManager != null) {
+            updateManager.resumePendingUpdateFlow();
+        }
+    }
+
+    @Override
     protected void onSaveInstanceState(Bundle outState) {
         if (webView != null) {
             webView.saveState(outState);
@@ -667,6 +690,10 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        if (updateManager != null) {
+            updateManager.destroy();
+        }
+
         if (webView != null) {
             webView.stopLoading();
             webView.setWebChromeClient(null);

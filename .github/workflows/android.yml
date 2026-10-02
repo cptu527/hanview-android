@@ -1,15 +1,16 @@
-name: Build Android APK
+name: Build and Publish ViewNyang
 
 on:
   workflow_dispatch:
   push:
     branches: [ "main" ]
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
 
     steps:
       - name: Checkout
@@ -26,14 +27,84 @@ jobs:
         with:
           gradle-version: "9.6.0"
 
-      - name: Build debug APK
-        run: gradle :app:assembleDebug --stacktrace
+      - name: Restore stable signing material
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
 
-      - name: Rename APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk ViewNyang-v0.5.1.apk
+          if gh release view viewnyang-signing >/dev/null 2>&1; then
+            gh release download viewnyang-signing --pattern "viewnyang-release.jks" --pattern "viewnyang-signing.env" --clobber
+          else
+            PASS="$(openssl rand -hex 32)"
+            keytool -genkeypair -keystore viewnyang-release.jks -storepass "$PASS" -keypass "$PASS" -alias viewnyang -keyalg RSA -keysize 4096 -validity 36500 -dname "CN=ViewNyang,O=ViewNyang,C=KR"
+            printf "VIEWNYANG_KEYSTORE_PASSWORD=%s\nVIEWNYANG_KEY_PASSWORD=%s\n" "$PASS" "$PASS" > viewnyang-signing.env
+            gh release create viewnyang-signing --draft --title "ViewNyang signing material" --notes "Private build material. Keep this release as draft."
+            gh release upload viewnyang-signing viewnyang-release.jks viewnyang-signing.env
+          fi
 
-      - name: Upload APK
+          test -s viewnyang-release.jks
+          test -s viewnyang-signing.env
+          cat viewnyang-signing.env >> "$GITHUB_ENV"
+          echo "VIEWNYANG_KEYSTORE_PATH=$GITHUB_WORKSPACE/viewnyang-release.jks" >> "$GITHUB_ENV"
+          echo "VIEWNYANG_KEY_ALIAS=viewnyang" >> "$GITHUB_ENV"
+
+      - name: Build signed release APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          gradle :app:assembleRelease --stacktrace
+          cp app/build/outputs/apk/release/app-release.apk ViewNyang-v0.6.0.apk
+          test -s ViewNyang-v0.6.0.apk
+
+      - name: Verify APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          keytool -printcert -jarfile ViewNyang-v0.6.0.apk
+          sha256sum ViewNyang-v0.6.0.apk
+
+      - name: Publish release APK
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if ! gh release view v0.6.0 >/dev/null 2>&1; then
+            gh release create v0.6.0 --title "ViewNyang v0.6.0" --notes "브라우저 안전영역 수정 · 주소창 · 읽기 잠금 · 앱 자체 업데이트"
+          fi
+          gh release upload v0.6.0 ViewNyang-v0.6.0.apk --clobber
+
+      - name: Write updater metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          SHA256="$(sha256sum ViewNyang-v0.6.0.apk | awk '{print $1}')"
+          cat > latest.json <<EOF
+          {
+            "versionCode": 13,
+            "versionName": "0.6.0",
+            "apkUrl": "https://github.com/cptu527/hanview-android/releases/download/v0.6.0/ViewNyang-v0.6.0.apk",
+            "sha256": "$SHA256",
+            "notes": "상단/하단 시스템 바 겹침 수정 · 복붙 주소창 · 읽기 잠금 유지 · 앱 내 업데이트 추가"
+          }
+          EOF
+
+      - name: Commit updater metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add latest.json
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: publish ViewNyang updater metadata [skip ci]"
+            git push
+          fi
+
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ViewNyang-v0.5.1-apk
-          path: ViewNyang-v0.5.1.apk
+          name: ViewNyang-v0.6.0-apk
+          path: ViewNyang-v0.6.0.apk
