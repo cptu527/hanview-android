@@ -10,6 +10,7 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewConfiguration;
 import android.webkit.CookieManager;
+import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
@@ -21,8 +22,12 @@ import android.widget.Toast;
 import java.util.regex.Pattern;
 
 public class MainActivity extends Activity {
-    private static final String START_URL =
-            "https://newtoki1.org/webtoon/18187/1520683";
+    private static final String START_PATH = "/webtoon/18187/1520683";
+    private static final String[] SITE_HOSTS = {
+            "toki31.com",
+            "sbxh9.com",
+            "newtoki1.org"
+    };
 
     private static final Pattern EPISODE_PATTERN =
             Pattern.compile("^/webtoon/\\d+/\\d+/?$");
@@ -35,6 +40,8 @@ public class MainActivity extends Activity {
     private float downY;
     private boolean moved;
     private int touchSlop;
+    private int activeHostIndex = 0;
+    private boolean failoverInProgress = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -48,7 +55,7 @@ public class MainActivity extends Activity {
         configureWebView();
 
         if (savedInstanceState == null) {
-            webView.loadUrl(START_URL);
+            webView.loadUrl(buildSiteUrl(SITE_HOSTS[activeHostIndex], START_PATH));
         } else {
             webView.restoreState(savedInstanceState);
         }
@@ -66,7 +73,7 @@ public class MainActivity extends Activity {
         toolbar.setBackgroundColor(Color.WHITE);
 
         toolbar.addView(action("‹", v -> goBack()));
-        toolbar.addView(action("홈", v -> webView.loadUrl("https://newtoki1.org/")));
+        toolbar.addView(action("홈", v -> webView.loadUrl(buildSiteUrl(SITE_HOSTS[activeHostIndex], "/"))));
         toolbar.addView(action("새로고침", v -> webView.reload()));
 
         TextView spacer = new TextView(this);
@@ -209,13 +216,99 @@ public class MainActivity extends Activity {
             }
 
             @Override
+            public void onReceivedError(
+                    WebView view,
+                    WebResourceRequest request,
+                    WebResourceError error
+            ) {
+                super.onReceivedError(view, request, error);
+                if (request != null && request.isForMainFrame()) {
+                    if (tryNextSiteHost(request.getUrl())) {
+                        return;
+                    }
+                }
+            }
+
+            @Override
             public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
+                failoverInProgress = false;
+                syncActiveHost(url);
                 readerLocked = isEpisodeUrl(url);
                 updateLockUi();
                 applyReaderGuard();
             }
         });
+    }
+
+    private String buildSiteUrl(String host, String pathAndQuery) {
+        if (pathAndQuery == null || pathAndQuery.isEmpty()) {
+            pathAndQuery = "/";
+        }
+        if (!pathAndQuery.startsWith("/")) {
+            pathAndQuery = "/" + pathAndQuery;
+        }
+        return "https://" + host + pathAndQuery;
+    }
+
+    private void syncActiveHost(String url) {
+        if (url == null) return;
+        try {
+            String host = Uri.parse(url).getHost();
+            if (host == null) return;
+            for (int i = 0; i < SITE_HOSTS.length; i++) {
+                if (SITE_HOSTS[i].equalsIgnoreCase(host)) {
+                    activeHostIndex = i;
+                    return;
+                }
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    private boolean tryNextSiteHost(Uri failedUri) {
+        if (failedUri == null || failoverInProgress) {
+            return false;
+        }
+
+        String failedHost = failedUri.getHost();
+        int failedIndex = -1;
+        for (int i = 0; i < SITE_HOSTS.length; i++) {
+            if (SITE_HOSTS[i].equalsIgnoreCase(failedHost)) {
+                failedIndex = i;
+                break;
+            }
+        }
+
+        if (failedIndex < 0 || failedIndex >= SITE_HOSTS.length - 1) {
+            return false;
+        }
+
+        activeHostIndex = failedIndex + 1;
+        StringBuilder path = new StringBuilder(
+                failedUri.getEncodedPath() == null || failedUri.getEncodedPath().isEmpty()
+                        ? "/"
+                        : failedUri.getEncodedPath()
+        );
+        if (failedUri.getEncodedQuery() != null) {
+            path.append("?").append(failedUri.getEncodedQuery());
+        }
+        if (failedUri.getEncodedFragment() != null) {
+            path.append("#").append(failedUri.getEncodedFragment());
+        }
+
+        failoverInProgress = true;
+        String nextUrl = buildSiteUrl(SITE_HOSTS[activeHostIndex], path.toString());
+        Toast.makeText(
+                this,
+                "접속 주소를 자동으로 바꿔 다시 연결할게요.",
+                Toast.LENGTH_SHORT
+        ).show();
+        webView.post(() -> {
+            failoverInProgress = false;
+            webView.loadUrl(nextUrl);
+        });
+        return true;
     }
 
     private boolean isEpisodeUrl(String url) {
