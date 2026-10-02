@@ -1,7 +1,7 @@
 {
-  "versionCode": 17,
-  "versionName": "0.6.4",
+  "versionCode": 18,
+  "versionName": "0.6.5",
   "apkUrl": "https://raw.githubusercontent.com/cptu527/hanview-android/main/ViewNyang-latest.apk",
-  "sha256": "91a1c429a1a6146e86855cbf827b667c7681652c448a92585fb2354291a9bd2a",
-  "notes": "새 회차 URL 읽기잠금 수정 · 좌우 넘김 차단 정상화 · 이미지 5화면 선로딩 · WebView 캐시/이미지 로딩 최적화"
+  "sha256": "727b69a965aa494dd996295ac28035d64657bdf8ccbf3e44fe4d45b1a86f419f",
+  "notes": "사이트 플로팅 리더 버튼 숨김 · 실제 맨아래 다음화/이전화/목록만 터치 허용 · 일반 탭/좌우 스와이프 차단 유지 · 이미지 선로딩 유지"
 }
