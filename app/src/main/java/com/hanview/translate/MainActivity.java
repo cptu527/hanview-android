@@ -42,7 +42,7 @@ public class MainActivity extends Activity {
     private static final String DEFAULT_URL = "about:blank";
 
     private static final Pattern EPISODE_PATTERN =
-            Pattern.compile("^/webtoon/\\d+/\\d+/?$");
+            Pattern.compile("^/webtoon/\\d+/[^/]+/?$");
 
     private WebView webView;
     private EditText addressBar;
@@ -456,6 +456,17 @@ public class MainActivity extends Activity {
         settings.setDisplayZoomControls(false);
         settings.setTextZoom(100);
         settings.setMediaPlaybackRequiresUserGesture(true);
+        settings.setCacheMode(WebSettings.LOAD_DEFAULT);
+        settings.setLoadsImagesAutomatically(true);
+        settings.setBlockNetworkImage(false);
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            settings.setMixedContentMode(WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE);
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            settings.setOffscreenPreRaster(true);
+        }
 
         String ua = settings.getUserAgentString();
         if (ua != null) {
@@ -608,6 +619,10 @@ public class MainActivity extends Activity {
                 updateNavigationButtons();
                 readerLocked = isEpisodeUrl(url);
                 applyReaderGuard();
+
+                if (readerLocked) {
+                    applyImagePreload();
+                }
 
                 if (!mainFrameLoadFailed
                         && url != null
@@ -778,6 +793,105 @@ public class MainActivity extends Activity {
                   }
                 })();
                 """.formatted(locked);
+
+        webView.evaluateJavascript(script, null);
+    }
+
+    private void applyImagePreload() {
+        if (webView == null) return;
+
+        String script = """
+                (function () {
+                  if (window.__viewNyangImagePreloadInstalled) {
+                    if (window.__viewNyangPrepareImages) {
+                      window.__viewNyangPrepareImages();
+                    }
+                    return;
+                  }
+
+                  window.__viewNyangImagePreloadInstalled = true;
+
+                  function promote(img, priority) {
+                    if (!img) return;
+
+                    var src =
+                      img.getAttribute('data-src') ||
+                      img.getAttribute('data-original') ||
+                      img.getAttribute('data-lazy-src') ||
+                      img.getAttribute('data-url');
+
+                    var srcset =
+                      img.getAttribute('data-srcset') ||
+                      img.getAttribute('data-lazy-srcset');
+
+                    if (srcset && !img.getAttribute('srcset')) {
+                      img.setAttribute('srcset', srcset);
+                    }
+
+                    if (src && (!img.getAttribute('src') ||
+                        img.getAttribute('src').indexOf('data:image') === 0)) {
+                      img.setAttribute('src', src);
+                    }
+
+                    img.loading = 'eager';
+                    img.decoding = 'async';
+
+                    try {
+                      img.fetchPriority = priority ? 'high' : 'auto';
+                    } catch (e) {}
+                  }
+
+                  var scheduled = false;
+
+                  window.__viewNyangPrepareImages = function () {
+                    scheduled = false;
+
+                    var viewportBottom =
+                      window.scrollY + window.innerHeight * 5;
+
+                    var images = document.querySelectorAll('img');
+
+                    for (var i = 0; i < images.length; i++) {
+                      var img = images[i];
+                      var rect = img.getBoundingClientRect();
+                      var top = rect.top + window.scrollY;
+
+                      if (top <= viewportBottom) {
+                        promote(img, top < window.scrollY + window.innerHeight * 1.5);
+                      }
+                    }
+                  };
+
+                  function schedule() {
+                    if (scheduled) return;
+                    scheduled = true;
+                    requestAnimationFrame(window.__viewNyangPrepareImages);
+                  }
+
+                  window.addEventListener('scroll', schedule, {passive:true});
+                  window.addEventListener('resize', schedule, {passive:true});
+
+                  var observer = new MutationObserver(schedule);
+                  observer.observe(document.documentElement, {
+                    childList: true,
+                    subtree: true,
+                    attributes: true,
+                    attributeFilter: [
+                      'src',
+                      'srcset',
+                      'data-src',
+                      'data-original',
+                      'data-lazy-src',
+                      'data-srcset',
+                      'data-lazy-srcset'
+                    ]
+                  });
+
+                  window.__viewNyangPrepareImages();
+                  setTimeout(window.__viewNyangPrepareImages, 350);
+                  setTimeout(window.__viewNyangPrepareImages, 1200);
+                })();
+                """;
 
         webView.evaluateJavascript(script, null);
     }
