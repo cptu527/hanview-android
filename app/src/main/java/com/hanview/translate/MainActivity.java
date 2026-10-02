@@ -904,7 +904,12 @@ public class MainActivity extends Activity {
                   }
 
                   function findAutoHideHeaders() {
-                    var candidates = document.querySelectorAll('body *');
+                    var candidates = document.querySelectorAll(
+                      'header,nav,[class*="header"],[class*="Header"],' +
+                      '[class*="nav"],[class*="Nav"],' +
+                      '[id*="header"],[id*="Header"],' +
+                      '[id*="nav"],[id*="Nav"]'
+                    );
 
                     for (var i = 0; i < candidates.length; i++) {
                       var el = candidates[i];
@@ -1135,32 +1140,34 @@ public class MainActivity extends Activity {
                     }
 
                     window.addEventListener('scroll', function () {
-                      scheduleHideFloating();
                       scheduleHeaderUpdate();
                     }, {passive:true});
 
                     window.addEventListener('resize', function () {
-                      scheduleHideFloating();
                       findAutoHideHeaders();
                       scheduleHeaderUpdate();
                     }, {passive:true});
 
+                    var mutationScheduled = false;
                     var floatingObserver = new MutationObserver(function () {
-                      scheduleHideFloating();
-                      findAutoHideHeaders();
-                      if (document.getElementById('viewnyang-nav-overlay')) {
+                      if (mutationScheduled) return;
+                      mutationScheduled = true;
+
+                      setTimeout(function () {
+                        mutationScheduled = false;
+                        hideFloatingReaderControls();
+                        findAutoHideHeaders();
+
                         var overlay = document.getElementById('viewnyang-nav-overlay');
-                        if (overlay.classList.contains('viewnyang-visible')) {
+                        if (overlay && overlay.classList.contains('viewnyang-visible')) {
                           setOverlayVisible(true);
                         }
-                      }
+                      }, 250);
                     });
 
                     floatingObserver.observe(document.documentElement, {
                       childList: true,
-                      subtree: true,
-                      attributes: true,
-                      attributeFilter: ['class','style','href']
+                      subtree: true
                     });
 
                     findAutoHideHeaders();
@@ -1175,12 +1182,21 @@ public class MainActivity extends Activity {
                     setTimeout(function () {
                       hideFloatingReaderControls();
                       findAutoHideHeaders();
-                    }, 400);
+                    }, 600);
 
                     setTimeout(function () {
                       hideFloatingReaderControls();
                       findAutoHideHeaders();
-                    }, 1200);
+                    }, 1500);
+
+                    // The page is normally fully assembled within a few seconds.
+                    // Stop watching afterward so long reading sessions do not
+                    // continuously scan the DOM and stress the WebView renderer.
+                    setTimeout(function () {
+                      try {
+                        floatingObserver.disconnect();
+                      } catch (e) {}
+                    }, 5000);
                   } else {
                     hideFloatingReaderControls();
                     findAutoHideHeaders();
