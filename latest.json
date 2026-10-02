@@ -1,7 +1,7 @@
 {
-  "versionCode": 14,
-  "versionName": "0.6.1",
-  "apkUrl": "https://github.com/cptu527/hanview-android/releases/download/v0.6.1/ViewNyang-v0.6.1.apk",
-  "sha256": "4f054e481712d4f7595bde57d409d0a456faa571ada64b36f66e52748545adcc",
-  "notes": "주소창 Google 검색 지원 · URL/검색어 자동 판별 · 브라우저 UI/읽기 잠금/앱 내 업데이트 유지"
+  "versionCode": 15,
+  "versionName": "0.6.2",
+  "apkUrl": "https://raw.githubusercontent.com/cptu527/hanview-android/main/ViewNyang-latest.apk",
+  "sha256": "a5d03d0079e7d80259fa83ba83e50b99ef4ed0b1c378e9ca535d4e599c685c3a",
+  "notes": "앱 업데이트 다운로드/설치 안정화 · 고정 raw APK 배포 · 실패 원인 표시 · Google 검색 주소창 유지"
 }
