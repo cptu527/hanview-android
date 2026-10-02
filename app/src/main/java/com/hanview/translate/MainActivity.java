@@ -124,7 +124,7 @@ public class MainActivity extends Activity {
         addressBar.setTextSize(14);
         addressBar.setTextColor(Color.rgb(35, 38, 45));
         addressBar.setHintTextColor(Color.rgb(120, 125, 135));
-        addressBar.setHint("주소를 입력하거나 붙여넣기");
+        addressBar.setHint("검색어 또는 주소 입력");
         addressBar.setPadding(dp(15), 0, dp(15), 0);
         addressBar.setInputType(
                 InputType.TYPE_CLASS_TEXT
@@ -265,17 +265,32 @@ public class MainActivity extends Activity {
     }
 
     private String normalizeAddress(String value) {
-        String url = value.trim();
+        String input = value.trim();
 
-        if (url.startsWith("http://") || url.startsWith("https://")) {
-            return url;
+        if (input.startsWith("http://") || input.startsWith("https://")) {
+            return input;
         }
 
-        if (url.startsWith("//")) {
-            return "https:" + url;
+        if (input.startsWith("//")) {
+            return "https:" + input;
         }
 
-        return "https://" + url;
+        boolean looksLikeDomain = input.matches(
+                "(?i)^(?:[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?\\.)+[a-z]{2,63}(?::\\d{1,5})?(?:/.*)?$"
+        );
+
+        boolean looksLikeIpv4 = input.matches(
+                "^\\d{1,3}(?:\\.\\d{1,3}){3}(?::\\d{1,5})?(?:/.*)?$"
+        );
+
+        boolean looksLikeLocalhost =
+                input.matches("(?i)^localhost(?::\\d{1,5})?(?:/.*)?$");
+
+        if (looksLikeDomain || looksLikeIpv4 || looksLikeLocalhost) {
+            return "https://" + input;
+        }
+
+        return "https://www.google.com/search?q=" + Uri.encode(input);
     }
 
     private void loadHome() {

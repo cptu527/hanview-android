@@ -55,15 +55,15 @@ jobs:
         run: |
           set -euo pipefail
           gradle :app:assembleRelease --stacktrace
-          cp app/build/outputs/apk/release/app-release.apk ViewNyang-v0.6.0.apk
-          test -s ViewNyang-v0.6.0.apk
+          cp app/build/outputs/apk/release/app-release.apk ViewNyang-v0.6.1.apk
+          test -s ViewNyang-v0.6.1.apk
 
       - name: Verify APK
         shell: bash
         run: |
           set -euo pipefail
-          keytool -printcert -jarfile ViewNyang-v0.6.0.apk
-          sha256sum ViewNyang-v0.6.0.apk
+          keytool -printcert -jarfile ViewNyang-v0.6.1.apk
+          sha256sum ViewNyang-v0.6.1.apk
 
       - name: Publish release APK
         shell: bash
@@ -71,23 +71,23 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          if ! gh release view v0.6.0 >/dev/null 2>&1; then
-            gh release create v0.6.0 --title "ViewNyang v0.6.0" --notes "브라우저 안전영역 수정 · 주소창 · 읽기 잠금 · 앱 자체 업데이트"
+          if ! gh release view v0.6.1 >/dev/null 2>&1; then
+            gh release create v0.6.1 --title "ViewNyang v0.6.1" --notes "Google 검색 주소창 · 브라우저 안전영역 · 읽기 잠금 · 앱 자체 업데이트"
           fi
-          gh release upload v0.6.0 ViewNyang-v0.6.0.apk --clobber
+          gh release upload v0.6.1 ViewNyang-v0.6.1.apk --clobber
 
       - name: Write updater metadata
         shell: bash
         run: |
           set -euo pipefail
-          SHA256="$(sha256sum ViewNyang-v0.6.0.apk | awk '{print $1}')"
+          SHA256="$(sha256sum ViewNyang-v0.6.1.apk | awk '{print $1}')"
           cat > latest.json <<EOF
           {
-            "versionCode": 13,
-            "versionName": "0.6.0",
-            "apkUrl": "https://github.com/cptu527/hanview-android/releases/download/v0.6.0/ViewNyang-v0.6.0.apk",
+            "versionCode": 14,
+            "versionName": "0.6.1",
+            "apkUrl": "https://github.com/cptu527/hanview-android/releases/download/v0.6.1/ViewNyang-v0.6.1.apk",
             "sha256": "$SHA256",
-            "notes": "상단/하단 시스템 바 겹침 수정 · 복붙 주소창 · 읽기 잠금 유지 · 앱 내 업데이트 추가"
+            "notes": "주소창 Google 검색 지원 · URL/검색어 자동 판별 · 브라우저 UI/읽기 잠금/앱 내 업데이트 유지"
           }
           EOF
 
@@ -106,5 +106,5 @@ jobs:
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ViewNyang-v0.6.0-apk
-          path: ViewNyang-v0.6.0.apk
+          name: ViewNyang-v0.6.1-apk
+          path: ViewNyang-v0.6.1.apk

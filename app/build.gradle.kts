@@ -10,8 +10,8 @@ android {
         applicationId = "com.hanview.translate"
         minSdk = 23
         targetSdk = 37
-        versionCode = 13
-        versionName = "0.6.0"
+        versionCode = 14
+        versionName = "0.6.1"
     }
 
     signingConfigs {
