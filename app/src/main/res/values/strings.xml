@@ -1,5 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">뷰냥</string>
-    <string name="accessibility_description">다른 앱의 화면 위에 번역 결과를 원래 UI처럼 표시하고 스크롤 변화를 감지합니다.</string>
 </resources>
