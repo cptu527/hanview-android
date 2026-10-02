@@ -9,6 +9,7 @@ import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.text.InputType;
 import android.view.Gravity;
@@ -38,8 +39,7 @@ public class MainActivity extends Activity {
     private static final String PREFS = "viewnyang_browser";
     private static final String KEY_LAST_URL = "last_url";
 
-    private static final String DEFAULT_URL =
-            "https://newtoki552.com/webtoon/18187/1520683";
+    private static final String DEFAULT_URL = "about:blank";
 
     private static final Pattern EPISODE_PATTERN =
             Pattern.compile("^/webtoon/\\d+/\\d+/?$");
@@ -55,6 +55,7 @@ public class MainActivity extends Activity {
     private float downY;
     private boolean moved;
     private int touchSlop;
+    private boolean mainFrameLoadFailed = false;
 
     private SharedPreferences prefs;
 
@@ -64,7 +65,12 @@ public class MainActivity extends Activity {
 
         getWindow().setStatusBarColor(Color.WHITE);
         getWindow().setNavigationBarColor(Color.WHITE);
-        getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR);
+
+        int systemUiFlags = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            systemUiFlags |= View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+        }
+        getWindow().getDecorView().setSystemUiVisibility(systemUiFlags);
 
         prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
         touchSlop = ViewConfiguration.get(this).getScaledTouchSlop();
@@ -88,6 +94,17 @@ public class MainActivity extends Activity {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(Color.WHITE);
+
+        root.setOnApplyWindowInsetsListener((v, insets) -> {
+            v.setPadding(
+                    insets.getSystemWindowInsetLeft(),
+                    insets.getSystemWindowInsetTop(),
+                    insets.getSystemWindowInsetRight(),
+                    insets.getSystemWindowInsetBottom()
+            );
+            return insets;
+        });
+        root.requestApplyInsets();
 
         LinearLayout addressRow = new LinearLayout(this);
         addressRow.setOrientation(LinearLayout.HORIZONTAL);
@@ -172,7 +189,7 @@ public class MainActivity extends Activity {
         bottomBar.setOrientation(LinearLayout.HORIZONTAL);
         bottomBar.setGravity(Gravity.CENTER);
         bottomBar.setPadding(dp(4), 0, dp(4), 0);
-        bottomBar.setBackgroundColor(Color.WHITE);
+        bottomBar.setBackgroundColor(Color.rgb(250, 250, 252));
         bottomBar.setElevation(dp(8));
 
         backButton = browserButton("‹", 31);
@@ -491,6 +508,7 @@ public class MainActivity extends Activity {
             ) {
                 super.onPageStarted(view, url, favicon);
 
+                mainFrameLoadFailed = false;
                 updateAddress(url);
                 readerLocked = isEpisodeUrl(url);
                 updateNavigationButtons();
@@ -505,6 +523,8 @@ public class MainActivity extends Activity {
                 super.onReceivedError(view, request, error);
 
                 if (request != null && request.isForMainFrame()) {
+                    mainFrameLoadFailed = true;
+                    prefs.edit().remove(KEY_LAST_URL).apply();
                     updateAddress(request.getUrl().toString());
                     Toast.makeText(
                             MainActivity.this,
@@ -523,7 +543,8 @@ public class MainActivity extends Activity {
                 readerLocked = isEpisodeUrl(url);
                 applyReaderGuard();
 
-                if (url != null
+                if (!mainFrameLoadFailed
+                        && url != null
                         && (url.startsWith("http://") || url.startsWith("https://"))) {
                     prefs.edit().putString(KEY_LAST_URL, url).apply();
                 }
@@ -533,6 +554,10 @@ public class MainActivity extends Activity {
 
     private void updateAddress(String url) {
         if (addressBar == null || addressBar.hasFocus() || url == null) {
+            return;
+        }
+        if ("about:blank".equals(url)) {
+            addressBar.setText("");
             return;
         }
         addressBar.setText(url);
