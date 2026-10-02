@@ -80,7 +80,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cp ViewNyang-v0.6.2.apk ViewNyang-latest.apk\n          SHA256="$(sha256sum ViewNyang-latest.apk | awk '{print $1}')"
+          cp ViewNyang-v0.6.2.apk ViewNyang-latest.apk
+          SHA256="$(sha256sum ViewNyang-latest.apk | awk '{print $1}')"
           cat > latest.json <<EOF
           {
             "versionCode": 15,
