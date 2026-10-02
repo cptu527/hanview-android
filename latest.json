@@ -1,7 +1,7 @@
 {
-  "versionCode": 16,
-  "versionName": "0.6.3",
+  "versionCode": 17,
+  "versionName": "0.6.4",
   "apkUrl": "https://raw.githubusercontent.com/cptu527/hanview-android/main/ViewNyang-latest.apk",
-  "sha256": "7168ed574c285b9dc29e7179129a4f47acaa2db4b65b08c474ee68e4f8d803df",
-  "notes": "읽기 잠금 강화 · 정지 탭/좌우 스와이프 차단 · 세로 스크롤/핀치 줌만 허용 · 앱 업데이트 유지"
+  "sha256": "91a1c429a1a6146e86855cbf827b667c7681652c448a92585fb2354291a9bd2a",
+  "notes": "새 회차 URL 읽기잠금 수정 · 좌우 넘김 차단 정상화 · 이미지 5화면 선로딩 · WebView 캐시/이미지 로딩 최적화"
 }
