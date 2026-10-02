@@ -1,47 +1,62 @@
 package com.hanview.translate;
 
 import android.app.Activity;
+import android.content.ClipData;
+import android.content.ClipboardManager;
+import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.graphics.Color;
+import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Bundle;
+import android.text.InputType;
 import android.view.Gravity;
+import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewConfiguration;
+import android.view.inputmethod.EditorInfo;
+import android.view.inputmethod.InputMethodManager;
 import android.webkit.CookieManager;
+import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.widget.EditText;
 import android.widget.LinearLayout;
+import android.widget.PopupMenu;
+import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
 import java.util.regex.Pattern;
 
 public class MainActivity extends Activity {
-    private static final String START_PATH = "/webtoon/18187/1520683";
-    private static final String[] SITE_HOSTS = {
-            "toki31.com",
-            "sbxh9.com",
-            "newtoki1.org"
-    };
+    private static final String PREFS = "viewnyang_browser";
+    private static final String KEY_LAST_URL = "last_url";
+
+    private static final String DEFAULT_URL =
+            "https://newtoki552.com/webtoon/18187/1520683";
 
     private static final Pattern EPISODE_PATTERN =
             Pattern.compile("^/webtoon/\\d+/\\d+/?$");
 
     private WebView webView;
-    private TextView lockButton;
-    private boolean readerLocked = true;
+    private EditText addressBar;
+    private ProgressBar progressBar;
+    private TextView backButton;
+    private TextView forwardButton;
 
+    private boolean readerLocked = true;
     private float downX;
     private float downY;
     private boolean moved;
     private int touchSlop;
-    private int activeHostIndex = 0;
-    private boolean failoverInProgress = false;
+
+    private SharedPreferences prefs;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -49,13 +64,21 @@ public class MainActivity extends Activity {
 
         getWindow().setStatusBarColor(Color.WHITE);
         getWindow().setNavigationBarColor(Color.WHITE);
+        getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR);
 
+        prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
         touchSlop = ViewConfiguration.get(this).getScaledTouchSlop();
+
         setContentView(buildUi());
         configureWebView();
 
         if (savedInstanceState == null) {
-            webView.loadUrl(buildSiteUrl(SITE_HOSTS[activeHostIndex], START_PATH));
+            String lastUrl = prefs.getString(KEY_LAST_URL, "");
+            webView.loadUrl(
+                    lastUrl == null || lastUrl.trim().isEmpty()
+                            ? DEFAULT_URL
+                            : lastUrl
+            );
         } else {
             webView.restoreState(savedInstanceState);
         }
@@ -66,65 +89,310 @@ public class MainActivity extends Activity {
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(Color.WHITE);
 
-        LinearLayout toolbar = new LinearLayout(this);
-        toolbar.setOrientation(LinearLayout.HORIZONTAL);
-        toolbar.setGravity(Gravity.CENTER_VERTICAL);
-        toolbar.setPadding(dp(4), 0, dp(4), 0);
-        toolbar.setBackgroundColor(Color.WHITE);
+        LinearLayout addressRow = new LinearLayout(this);
+        addressRow.setOrientation(LinearLayout.HORIZONTAL);
+        addressRow.setGravity(Gravity.CENTER_VERTICAL);
+        addressRow.setPadding(dp(10), dp(7), dp(8), dp(7));
+        addressRow.setBackgroundColor(Color.WHITE);
 
-        toolbar.addView(action("‹", v -> goBack()));
-        toolbar.addView(action("홈", v -> webView.loadUrl(buildSiteUrl(SITE_HOSTS[activeHostIndex], "/"))));
-        toolbar.addView(action("새로고침", v -> webView.reload()));
+        addressBar = new EditText(this);
+        addressBar.setSingleLine(true);
+        addressBar.setTextSize(14);
+        addressBar.setTextColor(Color.rgb(35, 38, 45));
+        addressBar.setHintTextColor(Color.rgb(120, 125, 135));
+        addressBar.setHint("주소를 입력하거나 붙여넣기");
+        addressBar.setPadding(dp(15), 0, dp(15), 0);
+        addressBar.setInputType(
+                InputType.TYPE_CLASS_TEXT
+                        | InputType.TYPE_TEXT_VARIATION_URI
+                        | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+        );
+        addressBar.setImeOptions(EditorInfo.IME_ACTION_GO);
+        addressBar.setSelectAllOnFocus(true);
+        addressBar.setBackground(rounded(Color.rgb(242, 243, 246), 22));
 
-        TextView spacer = new TextView(this);
-        toolbar.addView(spacer, new LinearLayout.LayoutParams(
-                0,
-                dp(48),
-                1f
-        ));
+        LinearLayout.LayoutParams addressLp =
+                new LinearLayout.LayoutParams(0, dp(44), 1f);
+        addressRow.addView(addressBar, addressLp);
 
-        lockButton = action("", v -> {
-            readerLocked = !readerLocked;
-            updateLockUi();
-            applyReaderGuard();
-            Toast.makeText(
-                    this,
-                    readerLocked
-                            ? "읽기 잠금 ON · 탭 이동/자동스크롤 차단"
-                            : "읽기 잠금 OFF · 사이트 버튼 사용 가능",
-                    Toast.LENGTH_SHORT
-            ).show();
+        TextView go = browserButton("→", 22);
+        LinearLayout.LayoutParams goLp =
+                new LinearLayout.LayoutParams(dp(48), dp(44));
+        goLp.leftMargin = dp(3);
+        addressRow.addView(go, goLp);
+
+        go.setOnClickListener(v -> loadTypedAddress());
+        addressBar.setOnEditorActionListener((v, actionId, event) -> {
+            boolean enter = event != null
+                    && event.getKeyCode() == KeyEvent.KEYCODE_ENTER
+                    && event.getAction() == KeyEvent.ACTION_DOWN;
+
+            if (actionId == EditorInfo.IME_ACTION_GO || enter) {
+                loadTypedAddress();
+                return true;
+            }
+            return false;
         });
-        toolbar.addView(lockButton);
 
-        root.addView(toolbar, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(48)
-        ));
+        root.addView(
+                addressRow,
+                new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        dp(58)
+                )
+        );
+
+        progressBar = new ProgressBar(
+                this,
+                null,
+                android.R.attr.progressBarStyleHorizontal
+        );
+        progressBar.setMax(100);
+        progressBar.setProgress(0);
+        progressBar.setVisibility(View.GONE);
+        root.addView(
+                progressBar,
+                new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        dp(2)
+                )
+        );
 
         webView = new WebView(this);
-        root.addView(webView, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                0,
-                1f
-        ));
+        root.addView(
+                webView,
+                new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        0,
+                        1f
+                )
+        );
 
-        updateLockUi();
+        LinearLayout bottomBar = new LinearLayout(this);
+        bottomBar.setOrientation(LinearLayout.HORIZONTAL);
+        bottomBar.setGravity(Gravity.CENTER);
+        bottomBar.setPadding(dp(4), 0, dp(4), 0);
+        bottomBar.setBackgroundColor(Color.WHITE);
+        bottomBar.setElevation(dp(8));
+
+        backButton = browserButton("‹", 31);
+        forwardButton = browserButton("›", 31);
+        TextView homeButton = browserButton("⌂", 23);
+        TextView reloadButton = browserButton("↻", 25);
+        TextView menuButton = browserButton("⋮", 28);
+
+        bottomBar.addView(backButton, navLp());
+        bottomBar.addView(forwardButton, navLp());
+        bottomBar.addView(homeButton, navLp());
+        bottomBar.addView(reloadButton, navLp());
+        bottomBar.addView(menuButton, navLp());
+
+        backButton.setOnClickListener(v -> goBack());
+        forwardButton.setOnClickListener(v -> {
+            if (webView.canGoForward()) webView.goForward();
+        });
+        homeButton.setOnClickListener(v -> loadHome());
+        reloadButton.setOnClickListener(v -> webView.reload());
+        menuButton.setOnClickListener(this::showBrowserMenu);
+
+        root.addView(
+                bottomBar,
+                new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        dp(56)
+                )
+        );
+
+        updateNavigationButtons();
         return root;
     }
 
-    private TextView action(String label, View.OnClickListener listener) {
+    private LinearLayout.LayoutParams navLp() {
+        return new LinearLayout.LayoutParams(0, dp(56), 1f);
+    }
+
+    private TextView browserButton(String label, float textSize) {
         TextView view = new TextView(this);
         view.setText(label);
-        view.setTextColor(Color.rgb(35, 39, 47));
-        view.setTextSize(14);
+        view.setTextColor(Color.rgb(45, 48, 55));
+        view.setTextSize(textSize);
         view.setGravity(Gravity.CENTER);
-        view.setPadding(dp(12), 0, dp(12), 0);
-        view.setMinHeight(dp(48));
-        view.setOnClickListener(listener);
+        view.setBackgroundColor(Color.TRANSPARENT);
         view.setClickable(true);
         view.setFocusable(true);
         return view;
+    }
+
+    private GradientDrawable rounded(int color, int radiusDp) {
+        GradientDrawable drawable = new GradientDrawable();
+        drawable.setColor(color);
+        drawable.setCornerRadius(dp(radiusDp));
+        return drawable;
+    }
+
+    private void loadTypedAddress() {
+        String value = addressBar.getText().toString().trim();
+        if (value.isEmpty()) return;
+
+        String url = normalizeAddress(value);
+        hideKeyboard();
+        addressBar.clearFocus();
+        webView.loadUrl(url);
+    }
+
+    private String normalizeAddress(String value) {
+        String url = value.trim();
+
+        if (url.startsWith("http://") || url.startsWith("https://")) {
+            return url;
+        }
+
+        if (url.startsWith("//")) {
+            return "https:" + url;
+        }
+
+        return "https://" + url;
+    }
+
+    private void loadHome() {
+        String current = webView.getUrl();
+        try {
+            Uri uri = Uri.parse(current);
+            if (uri.getHost() != null) {
+                webView.loadUrl("https://" + uri.getHost() + "/");
+                return;
+            }
+        } catch (Exception ignored) {
+        }
+
+        webView.loadUrl(DEFAULT_URL);
+    }
+
+    private void showBrowserMenu(View anchor) {
+        PopupMenu menu = new PopupMenu(this, anchor);
+
+        menu.getMenu().add(
+                readerLocked
+                        ? "읽기 잠금 끄기"
+                        : "읽기 잠금 켜기"
+        );
+        menu.getMenu().add("현재 주소 복사");
+        menu.getMenu().add("클립보드 주소로 이동");
+        menu.getMenu().add("캐시·쿠키 지우고 새로고침");
+        menu.getMenu().add("외부 브라우저로 열기");
+
+        menu.setOnMenuItemClickListener(item -> {
+            String title = item.getTitle().toString();
+
+            if (title.startsWith("읽기 잠금")) {
+                readerLocked = !readerLocked;
+                applyReaderGuard();
+                Toast.makeText(
+                        this,
+                        readerLocked
+                                ? "읽기 잠금 ON · 탭 이동과 자동스크롤 차단"
+                                : "읽기 잠금 OFF · 사이트 버튼 사용 가능",
+                        Toast.LENGTH_SHORT
+                ).show();
+                return true;
+            }
+
+            if ("현재 주소 복사".equals(title)) {
+                copyCurrentUrl();
+                return true;
+            }
+
+            if ("클립보드 주소로 이동".equals(title)) {
+                pasteAndGo();
+                return true;
+            }
+
+            if ("캐시·쿠키 지우고 새로고침".equals(title)) {
+                clearSiteDataAndReload();
+                return true;
+            }
+
+            if ("외부 브라우저로 열기".equals(title)) {
+                openExternalBrowser();
+                return true;
+            }
+
+            return false;
+        });
+
+        menu.show();
+    }
+
+    private void copyCurrentUrl() {
+        String url = webView.getUrl();
+        if (url == null || url.isEmpty()) return;
+
+        ClipboardManager clipboard =
+                (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+        clipboard.setPrimaryClip(
+                ClipData.newPlainText("뷰냥 주소", url)
+        );
+        Toast.makeText(this, "주소를 복사했어요.", Toast.LENGTH_SHORT).show();
+    }
+
+    private void pasteAndGo() {
+        ClipboardManager clipboard =
+                (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+
+        if (!clipboard.hasPrimaryClip()
+                || clipboard.getPrimaryClip() == null
+                || clipboard.getPrimaryClip().getItemCount() == 0) {
+            Toast.makeText(this, "클립보드에 주소가 없어요.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        CharSequence text =
+                clipboard.getPrimaryClip().getItemAt(0).coerceToText(this);
+
+        if (text == null || text.toString().trim().isEmpty()) {
+            return;
+        }
+
+        String value = text.toString().trim();
+        addressBar.setText(value);
+        webView.loadUrl(normalizeAddress(value));
+    }
+
+    private void clearSiteDataAndReload() {
+        webView.clearCache(true);
+        CookieManager.getInstance().removeAllCookies(value -> {
+            CookieManager.getInstance().flush();
+            runOnUiThread(() -> webView.reload());
+        });
+        Toast.makeText(
+                this,
+                "캐시와 쿠키를 지우고 다시 불러올게요.",
+                Toast.LENGTH_SHORT
+        ).show();
+    }
+
+    private void openExternalBrowser() {
+        String url = webView.getUrl();
+        if (url == null || url.isEmpty()) return;
+
+        try {
+            startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
+        } catch (Exception e) {
+            Toast.makeText(
+                    this,
+                    "외부 브라우저를 열 수 없어요.",
+                    Toast.LENGTH_SHORT
+            ).show();
+        }
+    }
+
+    private void hideKeyboard() {
+        View focused = getCurrentFocus();
+        if (focused == null) return;
+
+        InputMethodManager imm =
+                (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+        imm.hideSoftInputFromWindow(focused.getWindowToken(), 0);
     }
 
     @SuppressWarnings("SetJavaScriptEnabled")
@@ -132,6 +400,7 @@ public class MainActivity extends Activity {
         WebSettings settings = webView.getSettings();
         settings.setJavaScriptEnabled(true);
         settings.setDomStorageEnabled(true);
+        settings.setDatabaseEnabled(true);
         settings.setLoadWithOverviewMode(false);
         settings.setUseWideViewPort(true);
         settings.setSupportZoom(true);
@@ -142,14 +411,15 @@ public class MainActivity extends Activity {
 
         String ua = settings.getUserAgentString();
         if (ua != null) {
-            ua = ua.replace("; wv", "")
+            ua = ua
+                    .replace("; wv", "")
                     .replace("Version/4.0 ", "");
             settings.setUserAgentString(ua);
         }
 
         CookieManager cookies = CookieManager.getInstance();
         cookies.setAcceptCookie(true);
-        CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true);
+        cookies.setAcceptThirdPartyCookies(webView, true);
 
         webView.setVerticalScrollBarEnabled(false);
         webView.setHorizontalScrollBarEnabled(false);
@@ -158,9 +428,7 @@ public class MainActivity extends Activity {
         webView.setOnLongClickListener(v -> readerLocked);
 
         webView.setOnTouchListener((v, event) -> {
-            if (!readerLocked) {
-                return false;
-            }
+            if (!readerLocked) return false;
 
             switch (event.getActionMasked()) {
                 case MotionEvent.ACTION_DOWN:
@@ -177,13 +445,20 @@ public class MainActivity extends Activity {
                     return false;
 
                 case MotionEvent.ACTION_UP:
-                    if (!moved) {
-                        return true;
-                    }
-                    return false;
+                    return !moved;
 
                 default:
                     return false;
+            }
+        });
+
+        webView.setWebChromeClient(new WebChromeClient() {
+            @Override
+            public void onProgressChanged(WebView view, int progress) {
+                progressBar.setProgress(progress);
+                progressBar.setVisibility(
+                        progress >= 100 ? View.GONE : View.VISIBLE
+                );
             }
         });
 
@@ -209,10 +484,16 @@ public class MainActivity extends Activity {
             }
 
             @Override
-            public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
+            public void onPageStarted(
+                    WebView view,
+                    String url,
+                    android.graphics.Bitmap favicon
+            ) {
                 super.onPageStarted(view, url, favicon);
+
+                updateAddress(url);
                 readerLocked = isEpisodeUrl(url);
-                updateLockUi();
+                updateNavigationButtons();
             }
 
             @Override
@@ -222,93 +503,49 @@ public class MainActivity extends Activity {
                     WebResourceError error
             ) {
                 super.onReceivedError(view, request, error);
+
                 if (request != null && request.isForMainFrame()) {
-                    if (tryNextSiteHost(request.getUrl())) {
-                        return;
-                    }
+                    updateAddress(request.getUrl().toString());
+                    Toast.makeText(
+                            MainActivity.this,
+                            "접속이 막혔어요. 위 주소창에 새 주소를 붙여넣어 주세요.",
+                            Toast.LENGTH_LONG
+                    ).show();
                 }
             }
 
             @Override
             public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
-                failoverInProgress = false;
-                syncActiveHost(url);
+
+                updateAddress(url);
+                updateNavigationButtons();
                 readerLocked = isEpisodeUrl(url);
-                updateLockUi();
                 applyReaderGuard();
-            }
-        });
-    }
 
-    private String buildSiteUrl(String host, String pathAndQuery) {
-        if (pathAndQuery == null || pathAndQuery.isEmpty()) {
-            pathAndQuery = "/";
-        }
-        if (!pathAndQuery.startsWith("/")) {
-            pathAndQuery = "/" + pathAndQuery;
-        }
-        return "https://" + host + pathAndQuery;
-    }
-
-    private void syncActiveHost(String url) {
-        if (url == null) return;
-        try {
-            String host = Uri.parse(url).getHost();
-            if (host == null) return;
-            for (int i = 0; i < SITE_HOSTS.length; i++) {
-                if (SITE_HOSTS[i].equalsIgnoreCase(host)) {
-                    activeHostIndex = i;
-                    return;
+                if (url != null
+                        && (url.startsWith("http://") || url.startsWith("https://"))) {
+                    prefs.edit().putString(KEY_LAST_URL, url).apply();
                 }
             }
-        } catch (Exception ignored) {
-        }
+        });
     }
 
-    private boolean tryNextSiteHost(Uri failedUri) {
-        if (failedUri == null || failoverInProgress) {
-            return false;
+    private void updateAddress(String url) {
+        if (addressBar == null || addressBar.hasFocus() || url == null) {
+            return;
+        }
+        addressBar.setText(url);
+        addressBar.setSelection(addressBar.length());
+    }
+
+    private void updateNavigationButtons() {
+        if (webView == null || backButton == null || forwardButton == null) {
+            return;
         }
 
-        String failedHost = failedUri.getHost();
-        int failedIndex = -1;
-        for (int i = 0; i < SITE_HOSTS.length; i++) {
-            if (SITE_HOSTS[i].equalsIgnoreCase(failedHost)) {
-                failedIndex = i;
-                break;
-            }
-        }
-
-        if (failedIndex < 0 || failedIndex >= SITE_HOSTS.length - 1) {
-            return false;
-        }
-
-        activeHostIndex = failedIndex + 1;
-        StringBuilder path = new StringBuilder(
-                failedUri.getEncodedPath() == null || failedUri.getEncodedPath().isEmpty()
-                        ? "/"
-                        : failedUri.getEncodedPath()
-        );
-        if (failedUri.getEncodedQuery() != null) {
-            path.append("?").append(failedUri.getEncodedQuery());
-        }
-        if (failedUri.getEncodedFragment() != null) {
-            path.append("#").append(failedUri.getEncodedFragment());
-        }
-
-        failoverInProgress = true;
-        String nextUrl = buildSiteUrl(SITE_HOSTS[activeHostIndex], path.toString());
-        Toast.makeText(
-                this,
-                "접속 주소를 자동으로 바꿔 다시 연결할게요.",
-                Toast.LENGTH_SHORT
-        ).show();
-        webView.post(() -> {
-            failoverInProgress = false;
-            webView.loadUrl(nextUrl);
-        });
-        return true;
+        backButton.setAlpha(webView.canGoBack() ? 1f : 0.35f);
+        forwardButton.setAlpha(webView.canGoForward() ? 1f : 0.35f);
     }
 
     private boolean isEpisodeUrl(String url) {
@@ -321,11 +558,6 @@ public class MainActivity extends Activity {
         } catch (Exception ignored) {
             return false;
         }
-    }
-
-    private void updateLockUi() {
-        if (lockButton == null) return;
-        lockButton.setText(readerLocked ? "잠금 ON" : "잠금 OFF");
     }
 
     private void applyReaderGuard() {
@@ -371,12 +603,15 @@ public class MainActivity extends Activity {
                     document.addEventListener('dblclick', stopTap, true);
                     document.addEventListener('contextmenu', stopTap, true);
 
-                    var style = document.createElement('style');
-                    style.id = 'viewnyang-reader-style';
+                    var style = document.getElementById('viewnyang-reader-style');
+                    if (!style) {
+                      style = document.createElement('style');
+                      style.id = 'viewnyang-reader-style';
+                      document.documentElement.appendChild(style);
+                    }
                     style.textContent =
                       'html{scroll-behavior:auto!important;}' +
                       'body{-webkit-tap-highlight-color:transparent!important;}';
-                    document.documentElement.appendChild(style);
                   }
                 })();
                 """.formatted(locked);
@@ -409,6 +644,7 @@ public class MainActivity extends Activity {
     protected void onDestroy() {
         if (webView != null) {
             webView.stopLoading();
+            webView.setWebChromeClient(null);
             webView.setWebViewClient(null);
             webView.destroy();
         }
@@ -416,6 +652,8 @@ public class MainActivity extends Activity {
     }
 
     private int dp(int value) {
-        return Math.round(value * getResources().getDisplayMetrics().density);
+        return Math.round(
+                value * getResources().getDisplayMetrics().density
+        );
     }
 }
