@@ -903,6 +903,80 @@ public class MainActivity extends Activity {
                     }
                   }
 
+                  function findAutoHideHeaders() {
+                    var candidates = document.querySelectorAll('body *');
+
+                    for (var i = 0; i < candidates.length; i++) {
+                      var el = candidates[i];
+
+                      if (!el || !el.getBoundingClientRect) continue;
+                      if (el.id === 'viewnyang-nav-overlay') continue;
+                      if (el.closest && el.closest('#viewnyang-nav-overlay')) continue;
+                      if (el.getAttribute('data-viewnyang-hidden-floating') === '1') continue;
+
+                      var style = getComputedStyle(el);
+                      var pos = style.position;
+
+                      if (pos !== 'fixed' && pos !== 'sticky') continue;
+
+                      var rect = el.getBoundingClientRect();
+
+                      if (rect.width < window.innerWidth * 0.6) continue;
+                      if (rect.height < 28 || rect.height > 260) continue;
+                      if (rect.top > 180) continue;
+
+                      var controls = el.querySelectorAll(
+                        'a,button,[role="button"],[onclick]'
+                      ).length;
+
+                      if (controls < 2) continue;
+
+                      el.setAttribute('data-viewnyang-autoheader', '1');
+                    }
+                  }
+
+                  function setAutoHeadersHidden(hidden) {
+                    var headers = document.querySelectorAll(
+                      '[data-viewnyang-autoheader="1"]'
+                    );
+
+                    for (var i = 0; i < headers.length; i++) {
+                      headers[i].classList.toggle(
+                        'viewnyang-header-hidden',
+                        !!hidden
+                      );
+                    }
+                  }
+
+                  function updateAutoHeadersForScroll() {
+                    if (!window.__viewNyangLocked) {
+                      setAutoHeadersHidden(false);
+                      return;
+                    }
+
+                    var y = Math.max(
+                      window.scrollY || 0,
+                      document.documentElement.scrollTop || 0
+                    );
+
+                    if (typeof window.__viewNyangLastScrollY !== 'number') {
+                      window.__viewNyangLastScrollY = y;
+                      return;
+                    }
+
+                    var delta = y - window.__viewNyangLastScrollY;
+
+                    if (y < 60) {
+                      setAutoHeadersHidden(false);
+                    } else if (delta > 10) {
+                      setAutoHeadersHidden(true);
+                    } else if (delta < -5) {
+                      setAutoHeadersHidden(false);
+                    }
+
+                    window.__viewNyangLastScrollY = y;
+                  }
+
                   if (!window.__viewNyangGuardInstalled) {
                     window.__viewNyangGuardInstalled = true;
 
@@ -1032,7 +1106,9 @@ public class MainActivity extends Activity {
                       '#viewnyang-nav-overlay button{position:absolute!important;top:50%!important;transform:translateY(-50%)!important;display:flex!important;align-items:center!important;gap:6px!important;height:58px!important;padding:0 16px!important;border:0!important;border-radius:29px!important;background:rgba(20,20,24,.78)!important;color:#fff!important;font-size:30px!important;line-height:1!important;box-shadow:0 3px 16px rgba(0,0,0,.28)!important;pointer-events:auto!important;-webkit-tap-highlight-color:transparent!important;}' +
                       '#viewnyang-nav-overlay button span{font-size:14px!important;font-weight:700!important;white-space:nowrap!important;}' +
                       '#viewnyang-prev{left:12px!important;}' +
-                      '#viewnyang-next{right:12px!important;}';
+                      '#viewnyang-next{right:12px!important;}' +
+                      '[data-viewnyang-autoheader="1"]{transition:transform .2s ease,opacity .2s ease!important;will-change:transform!important;}' +
+                      '[data-viewnyang-autoheader="1"].viewnyang-header-hidden{transform:translateY(-115%)!important;opacity:0!important;pointer-events:none!important;}';
 
                     ensureNavOverlay();
 
@@ -1046,11 +1122,32 @@ public class MainActivity extends Activity {
                       });
                     }
 
-                    window.addEventListener('scroll', scheduleHideFloating, {passive:true});
-                    window.addEventListener('resize', scheduleHideFloating, {passive:true});
+                    var headerScrollScheduled = false;
+
+                    function scheduleHeaderUpdate() {
+                      if (headerScrollScheduled) return;
+                      headerScrollScheduled = true;
+
+                      requestAnimationFrame(function () {
+                        headerScrollScheduled = false;
+                        updateAutoHeadersForScroll();
+                      });
+                    }
+
+                    window.addEventListener('scroll', function () {
+                      scheduleHideFloating();
+                      scheduleHeaderUpdate();
+                    }, {passive:true});
+
+                    window.addEventListener('resize', function () {
+                      scheduleHideFloating();
+                      findAutoHideHeaders();
+                      scheduleHeaderUpdate();
+                    }, {passive:true});
 
                     var floatingObserver = new MutationObserver(function () {
                       scheduleHideFloating();
+                      findAutoHideHeaders();
                       if (document.getElementById('viewnyang-nav-overlay')) {
                         var overlay = document.getElementById('viewnyang-nav-overlay');
                         if (overlay.classList.contains('viewnyang-visible')) {
@@ -1066,12 +1163,29 @@ public class MainActivity extends Activity {
                       attributeFilter: ['class','style','href']
                     });
 
-                    setTimeout(hideFloatingReaderControls, 0);
-                    setTimeout(hideFloatingReaderControls, 400);
-                    setTimeout(hideFloatingReaderControls, 1200);
+                    findAutoHideHeaders();
+                    window.__viewNyangLastScrollY = window.scrollY || 0;
+
+                    setTimeout(function () {
+                      hideFloatingReaderControls();
+                      findAutoHideHeaders();
+                      updateAutoHeadersForScroll();
+                    }, 0);
+
+                    setTimeout(function () {
+                      hideFloatingReaderControls();
+                      findAutoHideHeaders();
+                    }, 400);
+
+                    setTimeout(function () {
+                      hideFloatingReaderControls();
+                      findAutoHideHeaders();
+                    }, 1200);
                   } else {
                     hideFloatingReaderControls();
+                    findAutoHideHeaders();
                     ensureNavOverlay();
+                    updateAutoHeadersForScroll();
                   }
                 })();
                 """.formatted(locked);

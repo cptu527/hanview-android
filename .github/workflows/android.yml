@@ -55,15 +55,15 @@ jobs:
         run: |
           set -euo pipefail
           gradle :app:assembleRelease --stacktrace
-          cp app/build/outputs/apk/release/app-release.apk ViewNyang-v0.6.6.apk
-          test -s ViewNyang-v0.6.6.apk
+          cp app/build/outputs/apk/release/app-release.apk ViewNyang-v0.6.7.apk
+          test -s ViewNyang-v0.6.7.apk
 
       - name: Verify APK
         shell: bash
         run: |
           set -euo pipefail
-          keytool -printcert -jarfile ViewNyang-v0.6.6.apk
-          sha256sum ViewNyang-v0.6.6.apk
+          keytool -printcert -jarfile ViewNyang-v0.6.7.apk
+          sha256sum ViewNyang-v0.6.7.apk
 
       - name: Publish release APK
         shell: bash
@@ -71,24 +71,24 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          if ! gh release view v0.6.6 >/dev/null 2>&1; then
-            gh release create v0.6.6 --title "ViewNyang v0.6.6" --notes "Google 검색 주소창 · 브라우저 안전영역 · 읽기 잠금 · 앱 자체 업데이트"
+          if ! gh release view v0.6.7 >/dev/null 2>&1; then
+            gh release create v0.6.7 --title "ViewNyang v0.6.7" --notes "Google 검색 주소창 · 브라우저 안전영역 · 읽기 잠금 · 앱 자체 업데이트"
           fi
-          gh release upload v0.6.6 ViewNyang-v0.6.6.apk --clobber
+          gh release upload v0.6.7 ViewNyang-v0.6.7.apk --clobber
 
       - name: Write updater metadata
         shell: bash
         run: |
           set -euo pipefail
-          cp ViewNyang-v0.6.6.apk ViewNyang-latest.apk
+          cp ViewNyang-v0.6.7.apk ViewNyang-latest.apk
           SHA256="$(sha256sum ViewNyang-latest.apk | awk '{print $1}')"
           cat > latest.json <<EOF
           {
-            "versionCode": 19,
-            "versionName": "0.6.6",
+            "versionCode": 20,
+            "versionName": "0.6.7",
             "apkUrl": "https://raw.githubusercontent.com/cptu527/hanview-android/main/ViewNyang-latest.apk",
             "sha256": "$SHA256",
-            "notes": "상단/하단 이전화·목록·다음화·책갈피 터치 허용 · 만화 이미지 탭 시 좌우 이전/다음 오버레이 표시 · 일반 탭/스와이프 차단 유지"
+            "notes": "회차 상단 사이트 메뉴 자동 숨김/복귀 · 이미지 탭 좌우 이전/다음 오버레이 · 이전화/목록/다음화/책갈피 터치 허용"
           }
           EOF
 
@@ -107,5 +107,5 @@ jobs:
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ViewNyang-v0.6.6-apk
-          path: ViewNyang-v0.6.6.apk
+          name: ViewNyang-v0.6.7-apk
+          path: ViewNyang-v0.6.7.apk
