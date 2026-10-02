@@ -54,6 +54,7 @@ public class MainActivity extends Activity {
     private float downX;
     private float downY;
     private boolean moved;
+    private boolean multiTouch;
     private int touchSlop;
     private boolean mainFrameLoadFailed = false;
 
@@ -482,17 +483,52 @@ public class MainActivity extends Activity {
                     downX = event.getX();
                     downY = event.getY();
                     moved = false;
+                    multiTouch = false;
+                    return false;
+
+                case MotionEvent.ACTION_POINTER_DOWN:
+                    multiTouch = true;
+                    moved = true;
                     return false;
 
                 case MotionEvent.ACTION_MOVE:
-                    if (Math.abs(event.getX() - downX) > touchSlop
-                            || Math.abs(event.getY() - downY) > touchSlop) {
+                    if (event.getPointerCount() > 1) {
+                        multiTouch = true;
+                        moved = true;
+                        return false;
+                    }
+
+                    float dx = Math.abs(event.getX() - downX);
+                    float dy = Math.abs(event.getY() - downY);
+
+                    if (dx > touchSlop || dy > touchSlop) {
                         moved = true;
                     }
+
+                    // Reader mode allows vertical scrolling only.
+                    // Consume a clearly horizontal one-finger gesture so the site
+                    // cannot interpret it as previous/next episode navigation.
+                    if (!multiTouch && dx > touchSlop && dx > dy * 1.15f) {
+                        return true;
+                    }
+
+                    return false;
+
+                case MotionEvent.ACTION_POINTER_UP:
                     return false;
 
                 case MotionEvent.ACTION_UP:
+                    if (multiTouch) {
+                        return false;
+                    }
+
+                    // A stationary/short tap never reaches the webpage.
                     return !moved;
+
+                case MotionEvent.ACTION_CANCEL:
+                    moved = false;
+                    multiTouch = false;
+                    return false;
 
                 default:
                     return false;
@@ -645,13 +681,84 @@ public class MainActivity extends Activity {
                       return originalScrollIntoView.apply(this, arguments);
                     };
 
-                    var stopTap = function (event) {
-                      if (!window.__viewNyangLocked) return;
+                    var touchStartX = 0;
+                    var touchStartY = 0;
+                    var touchMoved = false;
+                    var pointerStartX = 0;
+                    var pointerStartY = 0;
+                    var pointerMoved = false;
+
+                    var stop = function (event) {
                       event.preventDefault();
                       event.stopPropagation();
                       if (event.stopImmediatePropagation) {
                         event.stopImmediatePropagation();
                       }
+                    };
+
+                    document.addEventListener('touchstart', function (event) {
+                      if (!window.__viewNyangLocked || event.touches.length !== 1) return;
+                      touchStartX = event.touches[0].clientX;
+                      touchStartY = event.touches[0].clientY;
+                      touchMoved = false;
+                    }, true);
+
+                    document.addEventListener('touchmove', function (event) {
+                      if (!window.__viewNyangLocked || event.touches.length !== 1) return;
+
+                      var dx = Math.abs(event.touches[0].clientX - touchStartX);
+                      var dy = Math.abs(event.touches[0].clientY - touchStartY);
+
+                      if (dx > 8 || dy > 8) {
+                        touchMoved = true;
+                      }
+
+                      // Block horizontal swipe gestures while keeping vertical
+                      // scroll and multi-touch pinch zoom available.
+                      if (dx > 12 && dx > dy * 1.15) {
+                        stop(event);
+                      }
+                    }, {capture:true, passive:false});
+
+                    document.addEventListener('touchend', function (event) {
+                      if (!window.__viewNyangLocked) return;
+                      if (!touchMoved) {
+                        stop(event);
+                      }
+                    }, true);
+
+                    document.addEventListener('pointerdown', function (event) {
+                      if (!window.__viewNyangLocked || event.pointerType !== 'touch') return;
+                      pointerStartX = event.clientX;
+                      pointerStartY = event.clientY;
+                      pointerMoved = false;
+                    }, true);
+
+                    document.addEventListener('pointermove', function (event) {
+                      if (!window.__viewNyangLocked || event.pointerType !== 'touch') return;
+
+                      var dx = Math.abs(event.clientX - pointerStartX);
+                      var dy = Math.abs(event.clientY - pointerStartY);
+
+                      if (dx > 8 || dy > 8) {
+                        pointerMoved = true;
+                      }
+
+                      if (dx > 12 && dx > dy * 1.15) {
+                        stop(event);
+                      }
+                    }, true);
+
+                    document.addEventListener('pointerup', function (event) {
+                      if (!window.__viewNyangLocked || event.pointerType !== 'touch') return;
+                      if (!pointerMoved) {
+                        stop(event);
+                      }
+                    }, true);
+
+                    var stopTap = function (event) {
+                      if (!window.__viewNyangLocked) return;
+                      stop(event);
                     };
 
                     document.addEventListener('click', stopTap, true);
@@ -664,9 +771,10 @@ public class MainActivity extends Activity {
                       style.id = 'viewnyang-reader-style';
                       document.documentElement.appendChild(style);
                     }
+
                     style.textContent =
-                      'html{scroll-behavior:auto!important;}' +
-                      'body{-webkit-tap-highlight-color:transparent!important;}';
+                      'html{scroll-behavior:auto!important;overscroll-behavior-x:none!important;touch-action:pan-y pinch-zoom!important;}' +
+                      'body{-webkit-tap-highlight-color:transparent!important;overscroll-behavior-x:none!important;touch-action:pan-y pinch-zoom!important;}';
                   }
                 })();
                 """.formatted(locked);
