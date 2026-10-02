@@ -1,7 +1,7 @@
 {
-  "versionCode": 13,
-  "versionName": "0.6.0",
-  "apkUrl": "https://github.com/cptu527/hanview-android/releases/download/v0.6.0/ViewNyang-v0.6.0.apk",
-  "sha256": "8607d8f71c6415483f5ea2a4833e16f7c2c52b90528104b62494bc73d4e2494f",
-  "notes": "상단/하단 시스템 바 겹침 수정 · 복붙 주소창 · 읽기 잠금 유지 · 앱 내 업데이트 추가"
+  "versionCode": 14,
+  "versionName": "0.6.1",
+  "apkUrl": "https://github.com/cptu527/hanview-android/releases/download/v0.6.1/ViewNyang-v0.6.1.apk",
+  "sha256": "4f054e481712d4f7595bde57d409d0a456faa571ada64b36f66e52748545adcc",
+  "notes": "주소창 Google 검색 지원 · URL/검색어 자동 판별 · 브라우저 UI/읽기 잠금/앱 내 업데이트 유지"
 }
