@@ -17,7 +17,7 @@ import android.widget.Toast;
 
 import org.json.JSONObject;
 
-import java.io.InputStream;
+import java.io.File;\nimport java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
@@ -27,8 +27,10 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public final class AppUpdateManager {
-    private static final String LATEST_JSON =
-            "https://raw.githubusercontent.com/cptu527/hanview-android/main/latest.json";
+    private static final String[] LATEST_URLS = {
+            "https://raw.githubusercontent.com/cptu527/hanview-android/main/latest.json",
+            "https://github.com/cptu527/hanview-android/releases/download/latest/latest.json"
+    };
 
     private static final String PREFS = "viewnyang_update";
     private static final String KEY_DOWNLOAD_ID = "download_id";
@@ -67,49 +69,71 @@ public final class AppUpdateManager {
         }
 
         executor.execute(() -> {
-            HttpURLConnection connection = null;
+            Exception lastError = null;
 
-            try {
-                URL url = new URL(LATEST_JSON + "?t=" + System.currentTimeMillis());
-                connection = (HttpURLConnection) url.openConnection();
-                connection.setConnectTimeout(10000);
-                connection.setReadTimeout(10000);
-                connection.setUseCaches(false);
-                connection.setInstanceFollowRedirects(true);
-                connection.setRequestProperty("Accept", "application/json");
+            for (String baseUrl : LATEST_URLS) {
+                HttpURLConnection connection = null;
 
-                int code = connection.getResponseCode();
-                if (code < 200 || code >= 300) throw new IllegalStateException("HTTP " + code);
+                try {
+                    URL url = new URL(baseUrl + "?t=" + System.currentTimeMillis());
+                    connection = (HttpURLConnection) url.openConnection();
+                    connection.setConnectTimeout(10000);
+                    connection.setReadTimeout(10000);
+                    connection.setUseCaches(false);
+                    connection.setInstanceFollowRedirects(true);
+                    connection.setRequestProperty("Accept", "application/json");
+                    connection.setRequestProperty("User-Agent", "ViewNyang-Android");
 
-                byte[] body = connection.getInputStream().readAllBytes();
-                JSONObject json = new JSONObject(new String(body, StandardCharsets.UTF_8));
-
-                long latestCode = json.getLong("versionCode");
-                String versionName = json.getString("versionName");
-                String apkUrl = json.getString("apkUrl");
-                String sha256 = json.optString("sha256", "");
-                String notes = json.optString("notes", "");
-                long currentCode = currentVersionCode();
-
-                activity.runOnUiThread(() -> {
-                    if (latestCode > currentCode) {
-                        showUpdateDialog(versionName, apkUrl, sha256, notes);
-                    } else if (manual) {
-                        Toast.makeText(activity, "이미 최신 버전이에요.", Toast.LENGTH_SHORT).show();
+                    int code = connection.getResponseCode();
+                    if (code < 200 || code >= 300) {
+                        throw new IllegalStateException("HTTP " + code);
                     }
-                });
-            } catch (Exception e) {
-                if (manual) {
-                    activity.runOnUiThread(() ->
+
+                    byte[] body = connection.getInputStream().readAllBytes();
+                    JSONObject json = new JSONObject(
+                            new String(body, StandardCharsets.UTF_8)
+                    );
+
+                    long latestCode = json.getLong("versionCode");
+                    String versionName = json.getString("versionName");
+                    String apkUrl = json.getString("apkUrl");
+                    String sha256 = json.optString("sha256", "");
+                    String notes = json.optString("notes", "");
+                    long currentCode = currentVersionCode();
+
+                    activity.runOnUiThread(() -> {
+                        if (latestCode > currentCode) {
+                            showUpdateDialog(versionName, apkUrl, sha256, notes);
+                        } else if (manual) {
                             Toast.makeText(
                                     activity,
-                                    "업데이트 정보를 확인하지 못했어요.",
-                                    Toast.LENGTH_LONG
-                            ).show()
-                    );
+                                    "이미 최신 버전이에요.",
+                                    Toast.LENGTH_SHORT
+                            ).show();
+                        }
+                    });
+                    return;
+                } catch (Exception e) {
+                    lastError = e;
+                } finally {
+                    if (connection != null) {
+                        connection.disconnect();
+                    }
                 }
-            } finally {
-                if (connection != null) connection.disconnect();
+            }
+
+            if (manual) {
+                String reason = lastError == null
+                        ? "알 수 없는 오류"
+                        : lastError.getClass().getSimpleName();
+
+                activity.runOnUiThread(() ->
+                        new AlertDialog.Builder(activity)
+                                .setTitle("업데이트 확인 실패")
+                                .setMessage("업데이트 서버에 연결하지 못했어요.\n\n오류: " + reason)
+                                .setPositiveButton("확인", null)
+                                .show()
+                );
             }
         });
     }
@@ -200,6 +224,17 @@ public final class AppUpdateManager {
 
             String safeVersion = versionName.replaceAll("[^0-9A-Za-z._-]", "_");
 
+            File dir = activity.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
+            if (dir != null) {
+                File oldFile = new File(
+                        dir,
+                        "viewnyang-update-" + safeVersion + ".apk"
+                );
+                if (oldFile.exists()) {
+                    oldFile.delete();
+                }
+            }
+
             DownloadManager.Request request =
                     new DownloadManager.Request(Uri.parse(apkUrl));
 
@@ -243,7 +278,17 @@ public final class AppUpdateManager {
             if (status == DownloadManager.STATUS_SUCCESSFUL) {
                 verifyAndInstall(id);
             } else if (status == DownloadManager.STATUS_FAILED) {
+                int reasonIndex =
+                        cursor.getColumnIndex(DownloadManager.COLUMN_REASON);
+                int reason = reasonIndex >= 0 ? cursor.getInt(reasonIndex) : -1;
                 clearPending();
+                activity.runOnUiThread(() ->
+                        new AlertDialog.Builder(activity)
+                                .setTitle("업데이트 다운로드 실패")
+                                .setMessage("다운로드 오류 코드: " + reason)
+                                .setPositiveButton("확인", null)
+                                .show()
+                );
             }
         }
     }

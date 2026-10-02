@@ -55,15 +55,15 @@ jobs:
         run: |
           set -euo pipefail
           gradle :app:assembleRelease --stacktrace
-          cp app/build/outputs/apk/release/app-release.apk ViewNyang-v0.6.1.apk
-          test -s ViewNyang-v0.6.1.apk
+          cp app/build/outputs/apk/release/app-release.apk ViewNyang-v0.6.2.apk
+          test -s ViewNyang-v0.6.2.apk
 
       - name: Verify APK
         shell: bash
         run: |
           set -euo pipefail
-          keytool -printcert -jarfile ViewNyang-v0.6.1.apk
-          sha256sum ViewNyang-v0.6.1.apk
+          keytool -printcert -jarfile ViewNyang-v0.6.2.apk
+          sha256sum ViewNyang-v0.6.2.apk
 
       - name: Publish release APK
         shell: bash
@@ -71,23 +71,23 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          if ! gh release view v0.6.1 >/dev/null 2>&1; then
-            gh release create v0.6.1 --title "ViewNyang v0.6.1" --notes "Google 검색 주소창 · 브라우저 안전영역 · 읽기 잠금 · 앱 자체 업데이트"
+          if ! gh release view v0.6.2 >/dev/null 2>&1; then
+            gh release create v0.6.2 --title "ViewNyang v0.6.2" --notes "Google 검색 주소창 · 브라우저 안전영역 · 읽기 잠금 · 앱 자체 업데이트"
           fi
-          gh release upload v0.6.1 ViewNyang-v0.6.1.apk --clobber
+          gh release upload v0.6.2 ViewNyang-v0.6.2.apk --clobber
 
       - name: Write updater metadata
         shell: bash
         run: |
           set -euo pipefail
-          SHA256="$(sha256sum ViewNyang-v0.6.1.apk | awk '{print $1}')"
+          cp ViewNyang-v0.6.2.apk ViewNyang-latest.apk\n          SHA256="$(sha256sum ViewNyang-latest.apk | awk '{print $1}')"
           cat > latest.json <<EOF
           {
-            "versionCode": 14,
-            "versionName": "0.6.1",
-            "apkUrl": "https://github.com/cptu527/hanview-android/releases/download/v0.6.1/ViewNyang-v0.6.1.apk",
+            "versionCode": 15,
+            "versionName": "0.6.2",
+            "apkUrl": "https://raw.githubusercontent.com/cptu527/hanview-android/main/ViewNyang-latest.apk",
             "sha256": "$SHA256",
-            "notes": "주소창 Google 검색 지원 · URL/검색어 자동 판별 · 브라우저 UI/읽기 잠금/앱 내 업데이트 유지"
+            "notes": "앱 업데이트 다운로드/설치 안정화 · 고정 raw APK 배포 · 실패 원인 표시 · Google 검색 주소창 유지"
           }
           EOF
 
@@ -97,7 +97,7 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add latest.json
+          git add latest.json ViewNyang-latest.apk
           if ! git diff --cached --quiet; then
             git commit -m "chore: publish ViewNyang updater metadata [skip ci]"
             git push
@@ -106,5 +106,5 @@ jobs:
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ViewNyang-v0.6.1-apk
-          path: ViewNyang-v0.6.1.apk
+          name: ViewNyang-v0.6.2-apk
+          path: ViewNyang-v0.6.2.apk
