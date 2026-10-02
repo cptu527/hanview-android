@@ -691,58 +691,141 @@ public class MainActivity extends Activity {
                     return parts.join(' ').replace(/\\s+/g, ' ').trim().toLowerCase();
                   }
 
-                  function isEpisodeHref(href) {
-                    if (!href) return false;
-                    try {
-                      var u = new URL(href, location.href);
-                      return /^\\/webtoon\\/\\d+\\/[^/]+\\/?$/.test(u.pathname);
-                    } catch (e) {
-                      return false;
-                    }
-                  }
-
-                  function isAllowedReaderControl(target) {
-                    var el = closestControl(target);
+                  function isExplicitReaderControl(el) {
                     if (!el) return false;
 
                     if (el.getAttribute && el.getAttribute('data-viewnyang-allow') === '1') {
                       return true;
                     }
 
+                    var text = normalizeControlText(el);
+
+                    return /(이전화|이전 화|다음화|다음 화|목록|책갈피|bookmark|previous|prev|next|list)/i.test(text);
+                  }
+
+                  function isAllowedReaderControl(target) {
+                    return isExplicitReaderControl(closestControl(target));
+                  }
+
+                  function findReaderControl(kind) {
+                    var all = document.querySelectorAll(
+                      'a,button,[role="button"],[onclick]'
+                    );
+
+                    var pattern = kind === 'prev'
+                      ? /(이전화|이전 화|previous|prev)/i
+                      : /(다음화|다음 화|next)/i;
+
+                    for (var i = 0; i < all.length; i++) {
+                      var el = all[i];
+                      if (el.closest && el.closest('#viewnyang-nav-overlay')) continue;
+
+                      if (pattern.test(normalizeControlText(el))) {
+                        return el;
+                      }
+                    }
+
+                    return null;
+                  }
+
+                  function activateReaderControl(kind) {
+                    var el = findReaderControl(kind);
+
+                    if (!el) {
+                      return;
+                    }
+
                     var anchor = el.tagName === 'A'
                       ? el
                       : (el.closest ? el.closest('a') : null);
 
-                    var href = anchor ? anchor.href : (el.href || '');
-                    var text = normalizeControlText(el);
+                    var href = anchor && anchor.href ? anchor.href : '';
 
-                    var namedNavigation =
-                      /(다음화|다음 화|다음|next|이전화|이전 화|이전|prev|previous|목록|list)/i.test(text);
-
-                    if (namedNavigation && (isEpisodeHref(href) || /목록|list/i.test(text))) {
-                      return true;
+                    if (href) {
+                      location.href = href;
+                      return;
                     }
 
-                    // Some bottom reader controls are icon-only.
-                    // Only allow icon-only episode links very near the real
-                    // bottom of the document, never the floating toolbars.
-                    if (isEpisodeHref(href)) {
-                      var rect = el.getBoundingClientRect();
-                      var pageTop = rect.top + window.scrollY;
-                      var docHeight = Math.max(
-                        document.documentElement.scrollHeight,
-                        document.body ? document.body.scrollHeight : 0
-                      );
-                      var iconish = /^[\\s>›»→<‹«←]+$/.test(
-                        (el.innerText || el.textContent || '').trim()
-                      );
+                    try {
+                      el.setAttribute('data-viewnyang-allow', '1');
+                      el.click();
+                    } finally {
+                      setTimeout(function () {
+                        try {
+                          el.removeAttribute('data-viewnyang-allow');
+                        } catch (e) {}
+                      }, 0);
+                    }
+                  }
 
-                      if (iconish && pageTop > docHeight - Math.max(1600, window.innerHeight * 1.5)) {
-                        return true;
-                      }
+                  function ensureNavOverlay() {
+                    var overlay = document.getElementById('viewnyang-nav-overlay');
+                    if (overlay) return overlay;
+
+                    overlay = document.createElement('div');
+                    overlay.id = 'viewnyang-nav-overlay';
+                    overlay.setAttribute('data-viewnyang-allow', '1');
+                    overlay.innerHTML =
+                      '<button type="button" id="viewnyang-prev" data-viewnyang-allow="1">‹<span>이전화</span></button>' +
+                      '<button type="button" id="viewnyang-next" data-viewnyang-allow="1"><span>다음화</span>›</button>';
+
+                    document.documentElement.appendChild(overlay);
+
+                    var prev = document.getElementById('viewnyang-prev');
+                    var next = document.getElementById('viewnyang-next');
+
+                    prev.addEventListener('click', function (event) {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      activateReaderControl('prev');
+                    }, true);
+
+                    next.addEventListener('click', function (event) {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      activateReaderControl('next');
+                    }, true);
+
+                    return overlay;
+                  }
+
+                  function setOverlayVisible(visible) {
+                    var overlay = ensureNavOverlay();
+                    overlay.classList.toggle('viewnyang-visible', !!visible);
+
+                    var prev = document.getElementById('viewnyang-prev');
+                    var next = document.getElementById('viewnyang-next');
+
+                    if (prev) {
+                      prev.style.display = findReaderControl('prev') ? 'flex' : 'none';
                     }
 
-                    return false;
+                    if (next) {
+                      next.style.display = findReaderControl('next') ? 'flex' : 'none';
+                    }
+                  }
+
+                  function toggleOverlay() {
+                    var overlay = ensureNavOverlay();
+                    setOverlayVisible(
+                      !overlay.classList.contains('viewnyang-visible')
+                    );
+                  }
+
+                  function isReaderImage(target) {
+                    if (!target) return false;
+
+                    var img = target.tagName === 'IMG'
+                      ? target
+                      : (target.closest ? target.closest('img') : null);
+
+                    if (!img) return false;
+                    if (img.closest && img.closest('#viewnyang-nav-overlay')) return false;
+
+                    var rect = img.getBoundingClientRect();
+
+                    return rect.width >= window.innerWidth * 0.45 &&
+                           rect.height >= 120;
                   }
 
                   function stop(event) {
@@ -751,6 +834,23 @@ public class MainActivity extends Activity {
                     if (event.stopImmediatePropagation) {
                       event.stopImmediatePropagation();
                     }
+                  }
+
+                  var lastImageToggleAt = 0;
+
+                  function handleImageTap(event) {
+                    if (!window.__viewNyangLocked) return false;
+                    if (!isReaderImage(event.target)) return false;
+
+                    var now = Date.now();
+
+                    if (now - lastImageToggleAt > 300) {
+                      lastImageToggleAt = now;
+                      toggleOverlay();
+                    }
+
+                    stop(event);
+                    return true;
                   }
 
                   function shouldBlock(event) {
@@ -768,6 +868,8 @@ public class MainActivity extends Activity {
 
                       if (!el || !el.getBoundingClientRect) continue;
                       if (el.id === 'viewnyang-reader-style') continue;
+                      if (el.id === 'viewnyang-nav-overlay') continue;
+                      if (el.closest && el.closest('#viewnyang-nav-overlay')) continue;
 
                       var style = getComputedStyle(el);
                       if (style.display === 'none' || style.visibility === 'hidden') continue;
@@ -852,6 +954,11 @@ public class MainActivity extends Activity {
 
                     document.addEventListener('touchend', function (event) {
                       if (!window.__viewNyangLocked) return;
+
+                      if (!touchMoved && handleImageTap(event)) {
+                        return;
+                      }
+
                       if (!touchMoved && shouldBlock(event)) {
                         stop(event);
                       }
@@ -879,20 +986,35 @@ public class MainActivity extends Activity {
 
                     document.addEventListener('pointerup', function (event) {
                       if (!window.__viewNyangLocked || event.pointerType !== 'touch') return;
+
+                      if (!pointerMoved && handleImageTap(event)) {
+                        return;
+                      }
+
                       if (!pointerMoved && shouldBlock(event)) {
                         stop(event);
                       }
                     }, true);
 
-                    var blockOrdinaryActivation = function (event) {
+                    document.addEventListener('click', function (event) {
+                      if (!window.__viewNyangLocked) return;
+
+                      if (handleImageTap(event)) {
+                        return;
+                      }
+
                       if (shouldBlock(event)) {
                         stop(event);
                       }
-                    };
+                    }, true);
 
-                    document.addEventListener('click', blockOrdinaryActivation, true);
-                    document.addEventListener('dblclick', blockOrdinaryActivation, true);
-                    document.addEventListener('contextmenu', blockOrdinaryActivation, true);
+                    document.addEventListener('dblclick', function (event) {
+                      if (shouldBlock(event)) stop(event);
+                    }, true);
+
+                    document.addEventListener('contextmenu', function (event) {
+                      if (shouldBlock(event)) stop(event);
+                    }, true);
 
                     var style = document.getElementById('viewnyang-reader-style');
                     if (!style) {
@@ -904,7 +1026,15 @@ public class MainActivity extends Activity {
                     style.textContent =
                       'html{scroll-behavior:auto!important;overscroll-behavior-x:none!important;touch-action:pan-y pinch-zoom!important;}' +
                       'body{-webkit-tap-highlight-color:transparent!important;overscroll-behavior-x:none!important;touch-action:pan-y pinch-zoom!important;}' +
-                      '[data-viewnyang-hidden-floating="1"]{display:none!important;}';
+                      '[data-viewnyang-hidden-floating="1"]{display:none!important;}' +
+                      '#viewnyang-nav-overlay{position:fixed!important;inset:0!important;z-index:2147483646!important;pointer-events:none!important;opacity:0!important;transition:opacity .16s ease!important;}' +
+                      '#viewnyang-nav-overlay.viewnyang-visible{opacity:1!important;}' +
+                      '#viewnyang-nav-overlay button{position:absolute!important;top:50%!important;transform:translateY(-50%)!important;display:flex!important;align-items:center!important;gap:6px!important;height:58px!important;padding:0 16px!important;border:0!important;border-radius:29px!important;background:rgba(20,20,24,.78)!important;color:#fff!important;font-size:30px!important;line-height:1!important;box-shadow:0 3px 16px rgba(0,0,0,.28)!important;pointer-events:auto!important;-webkit-tap-highlight-color:transparent!important;}' +
+                      '#viewnyang-nav-overlay button span{font-size:14px!important;font-weight:700!important;white-space:nowrap!important;}' +
+                      '#viewnyang-prev{left:12px!important;}' +
+                      '#viewnyang-next{right:12px!important;}';
+
+                    ensureNavOverlay();
 
                     var hideScheduled = false;
                     function scheduleHideFloating() {
@@ -919,12 +1049,21 @@ public class MainActivity extends Activity {
                     window.addEventListener('scroll', scheduleHideFloating, {passive:true});
                     window.addEventListener('resize', scheduleHideFloating, {passive:true});
 
-                    var floatingObserver = new MutationObserver(scheduleHideFloating);
+                    var floatingObserver = new MutationObserver(function () {
+                      scheduleHideFloating();
+                      if (document.getElementById('viewnyang-nav-overlay')) {
+                        var overlay = document.getElementById('viewnyang-nav-overlay');
+                        if (overlay.classList.contains('viewnyang-visible')) {
+                          setOverlayVisible(true);
+                        }
+                      }
+                    });
+
                     floatingObserver.observe(document.documentElement, {
                       childList: true,
                       subtree: true,
                       attributes: true,
-                      attributeFilter: ['class','style']
+                      attributeFilter: ['class','style','href']
                     });
 
                     setTimeout(hideFloatingReaderControls, 0);
@@ -932,6 +1071,7 @@ public class MainActivity extends Activity {
                     setTimeout(hideFloatingReaderControls, 1200);
                   } else {
                     hideFloatingReaderControls();
+                    ensureNavOverlay();
                   }
                 })();
                 """.formatted(locked);
