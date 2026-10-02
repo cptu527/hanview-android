@@ -1,7 +1,7 @@
 {
-  "versionCode": 19,
-  "versionName": "0.6.6",
+  "versionCode": 20,
+  "versionName": "0.6.7",
   "apkUrl": "https://raw.githubusercontent.com/cptu527/hanview-android/main/ViewNyang-latest.apk",
-  "sha256": "544b0628b2bc0f7e76a4902bb3775b1ed8d940500328cb132aaf3053a75e9ff1",
-  "notes": "상단/하단 이전화·목록·다음화·책갈피 터치 허용 · 만화 이미지 탭 시 좌우 이전/다음 오버레이 표시 · 일반 탭/스와이프 차단 유지"
+  "sha256": "a36c909d8cb41b598f110e6a9b2d369956eff75d4f8593a6dba5d8ef80d2bd23",
+  "notes": "회차 상단 사이트 메뉴 자동 숨김/복귀 · 이미지 탭 좌우 이전/다음 오버레이 · 이전화/목록/다음화/책갈피 터치 허용"
 }
