@@ -1,7 +1,7 @@
 {
-  "versionCode": 21,
-  "versionName": "0.6.8",
+  "versionCode": 22,
+  "versionName": "0.6.9",
   "apkUrl": "https://raw.githubusercontent.com/cptu527/hanview-android/main/ViewNyang-latest.apk",
-  "sha256": "070c1eaa9d862c3ecdb42e39584e63e3a5fc11fae4c76b63098e8ab4e8c5ff19",
-  "notes": "WebView 충돌 완화 · 상단 메뉴 자동숨김 경량화 · DOM 감시 5초 후 종료 · 이미지 탭 이전/다음 오버레이 유지"
+  "sha256": "de22275f3ed92e7093cf7b38c2c9cd83f89917806330be48cfa43af635cbdfe8",
+  "notes": "긴급 복구 · 상단 자동숨김 롤백 · WebView 렌더러 크래시 복구 · 안전 부팅 · 이미지 선로딩 2화면으로 축소"
 }
