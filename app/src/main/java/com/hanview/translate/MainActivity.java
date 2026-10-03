@@ -17,9 +17,11 @@ import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewConfiguration;
+import android.view.ViewGroup;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
 import android.webkit.CookieManager;
+import android.webkit.RenderProcessGoneDetail;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
@@ -38,6 +40,8 @@ import java.util.regex.Pattern;
 public class MainActivity extends Activity {
     private static final String PREFS = "viewnyang_browser";
     private static final String KEY_LAST_URL = "last_url";
+    private static final String KEY_SAFE_BOOT_VERSION = "safe_boot_version";
+    private static final int SAFE_BOOT_VERSION = 22;
 
     private static final String DEFAULT_URL = "about:blank";
 
@@ -82,14 +86,29 @@ public class MainActivity extends Activity {
         configureWebView();
 
         if (savedInstanceState == null) {
-            String lastUrl = prefs.getString(KEY_LAST_URL, "");
-            webView.loadUrl(
-                    lastUrl == null || lastUrl.trim().isEmpty()
-                            ? DEFAULT_URL
-                            : lastUrl
-            );
+            int safeBootVersion = prefs.getInt(KEY_SAFE_BOOT_VERSION, 0);
+
+            if (safeBootVersion < SAFE_BOOT_VERSION) {
+                prefs.edit()
+                        .remove(KEY_LAST_URL)
+                        .putInt(KEY_SAFE_BOOT_VERSION, SAFE_BOOT_VERSION)
+                        .apply();
+                webView.loadUrl(DEFAULT_URL);
+            } else {
+                String lastUrl = prefs.getString(KEY_LAST_URL, "");
+                webView.loadUrl(
+                        lastUrl == null || lastUrl.trim().isEmpty()
+                                ? DEFAULT_URL
+                                : lastUrl
+                );
+            }
         } else {
-            webView.restoreState(savedInstanceState);
+            try {
+                webView.restoreState(savedInstanceState);
+            } catch (Exception ignored) {
+                prefs.edit().remove(KEY_LAST_URL).apply();
+                webView.loadUrl(DEFAULT_URL);
+            }
         }
 
         getWindow().getDecorView().postDelayed(
@@ -610,6 +629,50 @@ public class MainActivity extends Activity {
             }
 
             @Override
+            public boolean onRenderProcessGone(
+                    WebView view,
+                    RenderProcessGoneDetail detail
+            ) {
+                prefs.edit().remove(KEY_LAST_URL).apply();
+
+                runOnUiThread(() -> {
+                    Toast.makeText(
+                            MainActivity.this,
+                            "웹페이지 렌더러가 종료되어 안전하게 복구했어요. 주소를 다시 열어 주세요.",
+                            Toast.LENGTH_LONG
+                    ).show();
+
+                    try {
+                        ViewGroup parent = (ViewGroup) view.getParent();
+                        ViewGroup.LayoutParams params = view.getLayoutParams();
+                        int index = parent == null ? -1 : parent.indexOfChild(view);
+
+                        if (parent != null) {
+                            parent.removeView(view);
+                        }
+
+                        view.stopLoading();
+                        view.setWebChromeClient(null);
+                        view.setWebViewClient(null);
+                        view.destroy();
+
+                        webView = new WebView(MainActivity.this);
+
+                        if (parent != null && index >= 0) {
+                            parent.addView(webView, index, params);
+                        }
+
+                        configureWebView();
+                        webView.loadUrl(DEFAULT_URL);
+                    } catch (Exception recoveryError) {
+                        recreate();
+                    }
+                });
+
+                return true;
+            }
+
+            @Override
             public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
 
@@ -903,85 +966,6 @@ public class MainActivity extends Activity {
                     }
                   }
 
-                  function findAutoHideHeaders() {
-                    var candidates = document.querySelectorAll(
-                      'header,nav,[class*="header"],[class*="Header"],' +
-                      '[class*="nav"],[class*="Nav"],' +
-                      '[id*="header"],[id*="Header"],' +
-                      '[id*="nav"],[id*="Nav"]'
-                    );
-
-                    for (var i = 0; i < candidates.length; i++) {
-                      var el = candidates[i];
-
-                      if (!el || !el.getBoundingClientRect) continue;
-                      if (el.id === 'viewnyang-nav-overlay') continue;
-                      if (el.closest && el.closest('#viewnyang-nav-overlay')) continue;
-                      if (el.getAttribute('data-viewnyang-hidden-floating') === '1') continue;
-
-                      var style = getComputedStyle(el);
-                      var pos = style.position;
-
-                      if (pos !== 'fixed' && pos !== 'sticky') continue;
-
-                      var rect = el.getBoundingClientRect();
-
-                      if (rect.width < window.innerWidth * 0.6) continue;
-                      if (rect.height < 28 || rect.height > 260) continue;
-                      if (rect.top > 180) continue;
-
-                      var controls = el.querySelectorAll(
-                        'a,button,[role="button"],[onclick]'
-                      ).length;
-
-                      if (controls < 2) continue;
-
-                      el.setAttribute('data-viewnyang-autoheader', '1');
-                    }
-                  }
-
-                  function setAutoHeadersHidden(hidden) {
-                    var headers = document.querySelectorAll(
-                      '[data-viewnyang-autoheader="1"]'
-                    );
-
-                    for (var i = 0; i < headers.length; i++) {
-                      headers[i].classList.toggle(
-                        'viewnyang-header-hidden',
-                        !!hidden
-                      );
-                    }
-                  }
-
-                  function updateAutoHeadersForScroll() {
-                    if (!window.__viewNyangLocked) {
-                      setAutoHeadersHidden(false);
-                      return;
-                    }
-
-                    var y = Math.max(
-                      window.scrollY || 0,
-                      document.documentElement.scrollTop || 0
-                    );
-
-                    if (typeof window.__viewNyangLastScrollY !== 'number') {
-                      window.__viewNyangLastScrollY = y;
-                      return;
-                    }
-
-                    var delta = y - window.__viewNyangLastScrollY;
-
-                    if (y < 60) {
-                      setAutoHeadersHidden(false);
-                    } else if (delta > 10) {
-                      setAutoHeadersHidden(true);
-                    } else if (delta < -5) {
-                      setAutoHeadersHidden(false);
-                    }
-
-                    window.__viewNyangLastScrollY = y;
-                  }
-
                   if (!window.__viewNyangGuardInstalled) {
                     window.__viewNyangGuardInstalled = true;
 
@@ -1111,9 +1095,7 @@ public class MainActivity extends Activity {
                       '#viewnyang-nav-overlay button{position:absolute!important;top:50%!important;transform:translateY(-50%)!important;display:flex!important;align-items:center!important;gap:6px!important;height:58px!important;padding:0 16px!important;border:0!important;border-radius:29px!important;background:rgba(20,20,24,.78)!important;color:#fff!important;font-size:30px!important;line-height:1!important;box-shadow:0 3px 16px rgba(0,0,0,.28)!important;pointer-events:auto!important;-webkit-tap-highlight-color:transparent!important;}' +
                       '#viewnyang-nav-overlay button span{font-size:14px!important;font-weight:700!important;white-space:nowrap!important;}' +
                       '#viewnyang-prev{left:12px!important;}' +
-                      '#viewnyang-next{right:12px!important;}' +
-                      '[data-viewnyang-autoheader="1"]{transition:transform .2s ease,opacity .2s ease!important;will-change:transform!important;}' +
-                      '[data-viewnyang-autoheader="1"].viewnyang-header-hidden{transform:translateY(-115%)!important;opacity:0!important;pointer-events:none!important;}';
+                      '#viewnyang-next{right:12px!important;}';
 
                     ensureNavOverlay();
 
@@ -1127,81 +1109,32 @@ public class MainActivity extends Activity {
                       });
                     }
 
-                    var headerScrollScheduled = false;
+                    window.addEventListener('scroll', scheduleHideFloating, {passive:true});
+                    window.addEventListener('resize', scheduleHideFloating, {passive:true});
 
-                    function scheduleHeaderUpdate() {
-                      if (headerScrollScheduled) return;
-                      headerScrollScheduled = true;
-
-                      requestAnimationFrame(function () {
-                        headerScrollScheduled = false;
-                        updateAutoHeadersForScroll();
-                      });
-                    }
-
-                    window.addEventListener('scroll', function () {
-                      scheduleHeaderUpdate();
-                    }, {passive:true});
-
-                    window.addEventListener('resize', function () {
-                      findAutoHideHeaders();
-                      scheduleHeaderUpdate();
-                    }, {passive:true});
-
-                    var mutationScheduled = false;
                     var floatingObserver = new MutationObserver(function () {
-                      if (mutationScheduled) return;
-                      mutationScheduled = true;
-
-                      setTimeout(function () {
-                        mutationScheduled = false;
-                        hideFloatingReaderControls();
-                        findAutoHideHeaders();
-
+                      scheduleHideFloating();
+                      if (document.getElementById('viewnyang-nav-overlay')) {
                         var overlay = document.getElementById('viewnyang-nav-overlay');
-                        if (overlay && overlay.classList.contains('viewnyang-visible')) {
+                        if (overlay.classList.contains('viewnyang-visible')) {
                           setOverlayVisible(true);
                         }
-                      }, 250);
+                      }
                     });
 
                     floatingObserver.observe(document.documentElement, {
                       childList: true,
-                      subtree: true
+                      subtree: true,
+                      attributes: true,
+                      attributeFilter: ['class','style','href']
                     });
 
-                    findAutoHideHeaders();
-                    window.__viewNyangLastScrollY = window.scrollY || 0;
-
-                    setTimeout(function () {
-                      hideFloatingReaderControls();
-                      findAutoHideHeaders();
-                      updateAutoHeadersForScroll();
-                    }, 0);
-
-                    setTimeout(function () {
-                      hideFloatingReaderControls();
-                      findAutoHideHeaders();
-                    }, 600);
-
-                    setTimeout(function () {
-                      hideFloatingReaderControls();
-                      findAutoHideHeaders();
-                    }, 1500);
-
-                    // The page is normally fully assembled within a few seconds.
-                    // Stop watching afterward so long reading sessions do not
-                    // continuously scan the DOM and stress the WebView renderer.
-                    setTimeout(function () {
-                      try {
-                        floatingObserver.disconnect();
-                      } catch (e) {}
-                    }, 5000);
+                    setTimeout(hideFloatingReaderControls, 0);
+                    setTimeout(hideFloatingReaderControls, 400);
+                    setTimeout(hideFloatingReaderControls, 1200);
                   } else {
                     hideFloatingReaderControls();
-                    findAutoHideHeaders();
                     ensureNavOverlay();
-                    updateAutoHeadersForScroll();
                   }
                 })();
                 """.formatted(locked);
@@ -1259,7 +1192,7 @@ public class MainActivity extends Activity {
                     scheduled = false;
 
                     var viewportBottom =
-                      window.scrollY + window.innerHeight * 5;
+                      window.scrollY + window.innerHeight * 2;
 
                     var images = document.querySelectorAll('img');
 
@@ -1269,7 +1202,7 @@ public class MainActivity extends Activity {
                       var top = rect.top + window.scrollY;
 
                       if (top <= viewportBottom) {
-                        promote(img, top < window.scrollY + window.innerHeight * 1.5);
+                        promote(img, top < window.scrollY + window.innerHeight * 1.1);
                       }
                     }
                   };
