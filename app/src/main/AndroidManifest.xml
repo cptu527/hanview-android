@@ -12,6 +12,11 @@
         android:usesCleartextTraffic="false">
 
         <activity
+            android:name=".ReaderActivity"
+            android:exported="false"
+            android:process=":reader" />
+
+        <activity
             android:name=".MainActivity"
             android:exported="true">
             <intent-filter>
