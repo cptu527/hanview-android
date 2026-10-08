@@ -1,7 +1,7 @@
 {
-  "versionCode": 23,
-  "versionName": "0.7.0",
+  "versionCode": 24,
+  "versionName": "0.7.1",
   "apkUrl": "https://raw.githubusercontent.com/cptu527/hanview-android/main/ViewNyang-latest.apk",
-  "sha256": "9aa174ad57c5af71b0560127b626c69f294e2094cd122e8599b807f6bbf8d537",
-  "notes": "본체와 웹 리더 프로세스 분리 · 본체는 WebView 미사용 · 리더 충돌 시 본체 유지 · 기본 터치 잠금 유지"
+  "sha256": "db996b3c15d58e4d79fc052bd76afe4bcd6f61a103a4b1de8f51deafa4e87c99",
+  "notes": "이미지 탭 회차이동 차단 · 정지 이미지 탭을 WebView 네이티브 단계에서 소비 · 기존 리더 동작 유지"
 }
