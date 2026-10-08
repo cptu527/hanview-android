@@ -5,6 +5,7 @@ import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.SystemClock;
 import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
@@ -35,6 +36,7 @@ public class ReaderActivity extends Activity {
     private float downY;
     private boolean moved;
     private boolean multiTouch;
+    private long allowEpisodeNavigationUntil = 0L;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -167,6 +169,15 @@ public class ReaderActivity extends Activity {
                     downY = event.getY();
                     moved = false;
                     multiTouch = false;
+
+                    WebView.HitTestResult downHit = webView.getHitTestResult();
+                    if (downHit != null
+                            && downHit.getType() == WebView.HitTestResult.ANCHOR_TYPE) {
+                        allowEpisodeNavigationUntil =
+                                SystemClock.elapsedRealtime() + 1500L;
+                    } else {
+                        allowEpisodeNavigationUntil = 0L;
+                    }
                     return false;
 
                 case MotionEvent.ACTION_POINTER_DOWN:
@@ -231,6 +242,21 @@ public class ReaderActivity extends Activity {
                     WebView view,
                     WebResourceRequest request
             ) {
+                String current = view.getUrl();
+                String target = request.getUrl().toString();
+
+                if (isEpisode(current)
+                        && isEpisode(target)
+                        && isDifferentEpisode(current, target)) {
+
+                    if (SystemClock.elapsedRealtime()
+                            > allowEpisodeNavigationUntil) {
+                        return true;
+                    }
+
+                    allowEpisodeNavigationUntil = 0L;
+                }
+
                 return false;
             }
 
@@ -266,6 +292,19 @@ public class ReaderActivity extends Activity {
                 return true;
             }
         });
+    }
+
+    private boolean isDifferentEpisode(String first, String second) {
+        try {
+            String firstPath = Uri.parse(first).getPath();
+            String secondPath = Uri.parse(second).getPath();
+
+            return firstPath != null
+                    && secondPath != null
+                    && !firstPath.equals(secondPath);
+        } catch (Exception ignored) {
+            return false;
+        }
     }
 
     private boolean isEpisode(String url) {
