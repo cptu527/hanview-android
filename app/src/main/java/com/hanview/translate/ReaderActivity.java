@@ -276,7 +276,8 @@ public class ReaderActivity extends Activity {
                 int code = error == null ? 0 : error.getErrorCode();
 
                 boolean connectionFailure =
-                        code == ERROR_CONNECTION_RESET
+                        code == ERROR_CONNECT
+                                || code == ERROR_IO
                                 || code == ERROR_HOST_LOOKUP
                                 || code == ERROR_CONNECT
                                 || code == ERROR_TIMEOUT;
