@@ -33,6 +33,8 @@ public class ReaderActivity extends Activity {
     private int touchSlop;
     private float downX;
     private float downY;
+    private boolean moved;
+    private boolean multiTouch;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -163,17 +165,49 @@ public class ReaderActivity extends Activity {
                 case MotionEvent.ACTION_DOWN:
                     downX = event.getX();
                     downY = event.getY();
+                    moved = false;
+                    multiTouch = false;
+                    return false;
+
+                case MotionEvent.ACTION_POINTER_DOWN:
+                    multiTouch = true;
+                    moved = true;
                     return false;
 
                 case MotionEvent.ACTION_MOVE:
-                    if (event.getPointerCount() > 1) return false;
+                    if (event.getPointerCount() > 1) {
+                        multiTouch = true;
+                        moved = true;
+                        return false;
+                    }
 
                     float dx = Math.abs(event.getX() - downX);
                     float dy = Math.abs(event.getY() - downY);
 
+                    if (dx > touchSlop || dy > touchSlop) {
+                        moved = true;
+                    }
+
                     if (dx > touchSlop && dx > dy * 1.15f) {
                         return true;
                     }
+                    return false;
+
+                case MotionEvent.ACTION_UP:
+                    if (!moved && !multiTouch) {
+                        WebView.HitTestResult hit = webView.getHitTestResult();
+
+                        if (hit != null
+                                && (hit.getType() == WebView.HitTestResult.IMAGE_TYPE
+                                || hit.getType() == WebView.HitTestResult.SRC_IMAGE_ANCHOR_TYPE)) {
+                            return true;
+                        }
+                    }
+                    return false;
+
+                case MotionEvent.ACTION_CANCEL:
+                    moved = false;
+                    multiTouch = false;
                     return false;
 
                 default:
