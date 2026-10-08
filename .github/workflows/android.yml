@@ -55,15 +55,15 @@ jobs:
         run: |
           set -euo pipefail
           gradle :app:assembleRelease --stacktrace
-          cp app/build/outputs/apk/release/app-release.apk ViewNyang-v0.7.2.apk
-          test -s ViewNyang-v0.7.2.apk
+          cp app/build/outputs/apk/release/app-release.apk ViewNyang-v0.7.3.apk
+          test -s ViewNyang-v0.7.3.apk
 
       - name: Verify APK
         shell: bash
         run: |
           set -euo pipefail
-          keytool -printcert -jarfile ViewNyang-v0.7.2.apk
-          sha256sum ViewNyang-v0.7.2.apk
+          keytool -printcert -jarfile ViewNyang-v0.7.3.apk
+          sha256sum ViewNyang-v0.7.3.apk
 
       - name: Publish release APK
         shell: bash
@@ -71,24 +71,24 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          if ! gh release view v0.7.2 >/dev/null 2>&1; then
-            gh release create v0.7.2 --title "ViewNyang v0.7.2" --notes "Google 검색 주소창 · 브라우저 안전영역 · 읽기 잠금 · 앱 자체 업데이트"
+          if ! gh release view v0.7.3 >/dev/null 2>&1; then
+            gh release create v0.7.3 --title "ViewNyang v0.7.3" --notes "Google 검색 주소창 · 브라우저 안전영역 · 읽기 잠금 · 앱 자체 업데이트"
           fi
-          gh release upload v0.7.2 ViewNyang-v0.7.2.apk --clobber
+          gh release upload v0.7.3 ViewNyang-v0.7.3.apk --clobber
 
       - name: Write updater metadata
         shell: bash
         run: |
           set -euo pipefail
-          cp ViewNyang-v0.7.2.apk ViewNyang-latest.apk
+          cp ViewNyang-v0.7.3.apk ViewNyang-latest.apk
           SHA256="$(sha256sum ViewNyang-latest.apk | awk '{print $1}')"
           cat > latest.json <<EOF
           {
-            "versionCode": 25,
-            "versionName": "0.7.2",
+            "versionCode": 26,
+            "versionName": "0.7.3",
             "apkUrl": "https://raw.githubusercontent.com/cptu527/hanview-android/main/ViewNyang-latest.apk",
             "sha256": "$SHA256",
-            "notes": "회차간 URL 이동 기본 차단 · 실제 텍스트 링크 탭만 회차 이동 허용 · 이미지 탭 다음화 이동 차단"
+            "notes": "구주소 연결 실패 시 동일 경로 대체 호스트 자동 재시도 · 이미지 탭 회차이동 차단 유지"
           }
           EOF
 
@@ -107,5 +107,5 @@ jobs:
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ViewNyang-v0.7.2-apk
-          path: ViewNyang-v0.7.2.apk
+          name: ViewNyang-v0.7.3-apk
+          path: ViewNyang-v0.7.3.apk
