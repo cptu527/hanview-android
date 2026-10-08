@@ -13,6 +13,7 @@ import android.view.ViewConfiguration;
 import android.webkit.CookieManager;
 import android.webkit.RenderProcessGoneDetail;
 import android.webkit.WebChromeClient;
+import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
@@ -37,6 +38,7 @@ public class ReaderActivity extends Activity {
     private boolean moved;
     private boolean multiTouch;
     private long allowEpisodeNavigationUntil = 0L;
+    private boolean hostFallbackAttempted = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -261,6 +263,54 @@ public class ReaderActivity extends Activity {
             }
 
             @Override
+            public void onReceivedError(
+                    WebView view,
+                    WebResourceRequest request,
+                    WebResourceError error
+            ) {
+                if (request == null || !request.isForMainFrame()) {
+                    return;
+                }
+
+                String failingUrl = request.getUrl().toString();
+                int code = error == null ? 0 : error.getErrorCode();
+
+                boolean connectionFailure =
+                        code == ERROR_CONNECTION_RESET
+                                || code == ERROR_HOST_LOOKUP
+                                || code == ERROR_CONNECT
+                                || code == ERROR_TIMEOUT;
+
+                if (!hostFallbackAttempted
+                        && connectionFailure
+                        && isLegacyHost(failingUrl)) {
+
+                    hostFallbackAttempted = true;
+                    String fallbackUrl = switchHost(
+                            failingUrl,
+                            "sbxh9.com"
+                    );
+
+                    if (fallbackUrl != null) {
+                        Toast.makeText(
+                                ReaderActivity.this,
+                                "기존 주소 연결이 끊겨 대체 주소로 다시 열게요.",
+                                Toast.LENGTH_SHORT
+                        ).show();
+
+                        view.loadUrl(fallbackUrl);
+                        return;
+                    }
+                }
+
+                Toast.makeText(
+                        ReaderActivity.this,
+                        "페이지 연결에 실패했어요.",
+                        Toast.LENGTH_SHORT
+                ).show();
+            }
+
+            @Override
             public void onPageStarted(
                     WebView view,
                     String url,
@@ -292,6 +342,32 @@ public class ReaderActivity extends Activity {
                 return true;
             }
         });
+    }
+
+    private boolean isLegacyHost(String url) {
+        try {
+            String host = Uri.parse(url).getHost();
+
+            return host != null
+                    && (host.equalsIgnoreCase("newtoki1.org")
+                    || host.equalsIgnoreCase("www.newtoki1.org"));
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private String switchHost(String url, String newHost) {
+        try {
+            Uri old = Uri.parse(url);
+
+            return old.buildUpon()
+                    .scheme("https")
+                    .authority(newHost)
+                    .build()
+                    .toString();
+        } catch (Exception ignored) {
+            return null;
+        }
     }
 
     private boolean isDifferentEpisode(String first, String second) {
